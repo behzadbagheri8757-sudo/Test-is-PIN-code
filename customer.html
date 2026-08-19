@@ -139,6 +139,66 @@ function drawCustomerPage(){
   let behaviorHtml = '';
   if(typeof customerBehavior === 'function'){
     const b = customerBehavior(c.id);
+
+    /* --- خلاصهٔ وضعیت (برای مرور سریع بین دو مغازه) ---
+       فقط از خروجی customerBehavior() تغذیه می‌شود، هیچ متریکی را دوباره
+       محاسبه یا تغییر نمی‌دهد. صرفاً نتایج موجود را برای تصمیم سریع کنار هم می‌گذارد. */
+    function customerBehaviorSummary(bb){
+      if(!bb) return null;
+      if(bb.invoiceCount < 2){
+        return { level: 'insufficient', lines: [
+          bb.invoiceCount === 0 ? 'هنوز فاکتوری برای این مشتری ثبت نشده است.' : 'فقط یک فاکتور ثبت شده — برای تشخیص الگوی خرید حداقل ۲ فاکتور لازم است.'
+        ]};
+      }
+      const risk = [], good = [];
+      if(bb.behindPattern === true){
+        risk.push('از الگوی معمول خرید عقب افتاده — ' + Math.round(bb.daysSinceLast) + ' روز از آخرین خرید گذشته (الگو: هر ' + Math.round(bb.avgIntervalDays) + ' روز)');
+      } else if(bb.behindPattern === false){
+        good.push('در محدودهٔ الگوی معمول خرید است');
+      }
+      if(bb.amountTrend === 'down'){
+        risk.push('روند مبلغ خرید در ۳۰ روز اخیر کاهشی است');
+      } else if(bb.amountTrend === 'up'){
+        good.push('روند مبلغ خرید در ۳۰ روز اخیر افزایشی است');
+      }
+      if(bb.decliningProducts && bb.decliningProducts.length){
+        risk.push('افت خرید در: ' + bb.decliningProducts.slice(0,2).map(p=>p.name).join('، '));
+      }
+      if(bb.consecutiveNoOrder >= 2){
+        risk.push('آخرین ' + bb.consecutiveNoOrder + ' ویزیت بدون سفارش بوده');
+      }
+      if(bb.conversionRate != null && bb.visitCount >= 2 && bb.conversionRate >= 0.5){
+        good.push('نرخ تبدیل ویزیت به سفارش بالا: ' + Math.round(bb.conversionRate*100) + '٪');
+      }
+      let level = 'normal';
+      if(risk.length >= 2) level = 'risk';
+      else if(risk.length === 1) level = 'watch';
+      else if(good.length) level = 'good';
+      const reminder = (bb.topProducts && bb.topProducts[0]) ? ('کالای اصلی: ' + bb.topProducts[0].name) : null;
+      const action = bb.lastNextAction ? ('اقدام یادداشت‌شده از ویزیت قبل: ' + bb.lastNextAction) : null;
+      return { level, risk, good, reminder, action };
+    }
+
+    let summaryHtml = '';
+    const summary = customerBehaviorSummary(b);
+    if(summary && summary.level === 'insufficient'){
+      summaryHtml = `<div class="card wide" style="margin-bottom:10px;">
+        <div class="label">خلاصهٔ وضعیت</div>
+        <div class="value" style="font-size:.9rem;">${esc(summary.lines[0])}</div>
+      </div>`;
+    } else if(summary){
+      const badgeMap = { risk: ['نیاز به توجه','accent-rust'], watch: ['قابل بررسی','accent-amber'], good: ['وضعیت مطلوب','accent-olive'], normal: ['عادی',''] };
+      const bm = badgeMap[summary.level] || badgeMap.normal;
+      const noteLines = [...summary.risk, ...summary.good];
+      const extraLines = [summary.reminder, summary.action].filter(Boolean);
+      summaryHtml = `<div class="card wide" style="margin-bottom:10px;">
+        <div class="label">خلاصهٔ وضعیت</div>
+        <div class="value ${bm[1]}" style="font-size:1.05rem;">${esc(bm[0])}</div>
+        ${noteLines.length ? `<div style="font-size:.85rem;line-height:1.9;margin-top:8px;color:var(--ink);">${noteLines.map(x=>'• '+esc(x)).join('<br>')}</div>` : ''}
+        ${extraLines.length ? `<div style="font-size:.85rem;line-height:1.9;margin-top:8px;padding-top:8px;border-top:1px dotted var(--line);color:var(--ink);">${extraLines.map(x=>'🔹 '+esc(x)).join('<br>')}</div>` : ''}
+      </div>`;
+    }
+
     const trendLabel = b.amountTrend === 'up' ? 'سیگنال افزایش' : (b.amountTrend === 'down' ? 'سیگنال کاهش' : (b.amountTrend === 'flat' ? 'تقریباً ثابت' : null));
     const trendCls = b.amountTrend === 'up' ? 'accent-olive' : (b.amountTrend === 'down' ? 'accent-rust' : '');
     const intervalText = b.avgIntervalDays != null
@@ -172,7 +232,10 @@ function drawCustomerPage(){
 
     behaviorHtml = `
       <h3 class="sub-title">رفتار خرید مشتری</h3>
-      <div class="cards" style="margin-bottom:10px;">
+      ${summaryHtml}
+      <details style="margin-bottom:12px;">
+      <summary style="cursor:pointer;color:var(--olive-dark);font-weight:700;padding:6px 0;list-style:none;">جزئیات کامل رفتار خرید ▾</summary>
+      <div class="cards" style="margin-top:10px;margin-bottom:10px;">
         <div class="card"><div class="label">اولین خرید</div><div class="value" style="font-size:.95rem;">${b.firstInvoiceDate ? faDate(b.firstInvoiceDate) : '—'}</div></div>
         <div class="card"><div class="label">آخرین خرید</div><div class="value" style="font-size:.95rem;">${b.lastInvoiceDate ? faDate(b.lastInvoiceDate) : '—'}</div></div>
         <div class="card"><div class="label">تعداد فاکتور</div><div class="value">${b.invoiceCount}</div></div>
@@ -194,6 +257,7 @@ function drawCustomerPage(){
         <div class="label">آخرین ویزیت — ${faDate(lv.date)}${lv.time ? ' ' + esc(lv.time) : ''}</div>
         <div style="font-size:.88rem;line-height:1.7;margin-top:6px;">${lastVisitBits.join('<br>')}</div>
       </div>` : '<div class="empty" style="padding:8px 0 12px;">ویزیتی ثبت نشده</div>'}
+      </details>
     `;
   }
 
