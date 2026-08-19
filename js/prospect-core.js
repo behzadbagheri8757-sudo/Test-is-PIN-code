@@ -305,6 +305,24 @@ async function convertProspectToCustomer(shopId){
 
 async function bootProspectPage(activeNavId, afterLoad){
   try{
+    /* PIN gate (minimal): unlock before any CRM/prospect render. Does not touch data/FIFO. */
+    try{
+      var pinConfigured = false;
+      try{ pinConfigured = !!(localStorage.getItem('baqeri_pin_lock_v1')); }catch(_e){}
+      if(pinConfigured){
+        if(!window.pinLock || typeof window.pinLock.ensureUnlocked !== 'function'){
+          document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">قفل PIN فعال است اما ماژول قفل بارگذاری نشد. صفحه را دوباره باز کنید.</div>';
+          return;
+        }
+        await window.pinLock.ensureUnlocked();
+      } else if(window.pinLock && typeof window.pinLock.ensureUnlocked === 'function'){
+        await window.pinLock.ensureUnlocked();
+      }
+    }catch(pinErr){
+      console.error('pin lock gate failed', pinErr);
+      document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">خطا در قفل PIN. صفحه را دوباره باز کنید.</div>';
+      return;
+    }
     if(typeof loadData==='function') await loadData();
     if(typeof renderSharedNav==='function') renderSharedNav(activeNavId);
     if(typeof renderBottomNav==='function') renderBottomNav(activeNavId);

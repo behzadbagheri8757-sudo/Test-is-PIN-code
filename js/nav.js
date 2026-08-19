@@ -294,6 +294,24 @@ function getQueryParam(name){
 /** Load IndexedDB data, draw shared + bottom nav, then run page callback. */
 async function bootPage(activeId, afterLoad){
   try{
+    /* PIN gate (minimal): unlock before any CRM render. Does not touch data/FIFO. */
+    try{
+      var pinConfigured = false;
+      try{ pinConfigured = !!(localStorage.getItem('baqeri_pin_lock_v1')); }catch(_e){}
+      if(pinConfigured){
+        if(!window.pinLock || typeof window.pinLock.ensureUnlocked !== 'function'){
+          document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">قفل PIN فعال است اما ماژول قفل بارگذاری نشد. صفحه را دوباره باز کنید.</div>';
+          return;
+        }
+        await window.pinLock.ensureUnlocked();
+      } else if(window.pinLock && typeof window.pinLock.ensureUnlocked === 'function'){
+        await window.pinLock.ensureUnlocked();
+      }
+    }catch(pinErr){
+      console.error('pin lock gate failed', pinErr);
+      document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">خطا در قفل PIN. صفحه را دوباره باز کنید.</div>';
+      return;
+    }
     await loadData();
     renderSharedNav(activeId);
     renderBottomNav(activeId);
