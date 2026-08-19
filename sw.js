@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const CACHE_NAME = 'baqeri-shell-v6';
+const CACHE_NAME = 'baqeri-shell-v7';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
@@ -37,6 +37,7 @@ const PRECACHE_URLS = [
   './js/stock.js',
   './js/payments.js',
   './js/backup.js',
+  './js/pin-lock.js',
   './js/nav.js',
   './js/app.js',
   './js/prospect-scoring.js',

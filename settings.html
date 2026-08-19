@@ -53,6 +53,7 @@
 <script src="./js/stock.js"></script>
 <script src="./js/payments.js"></script>
 <script src="./js/backup.js"></script>
+<script src="./js/pin-lock.js"></script>
 <script src="./js/nav.js"></script>
 <script src="./js/app.js"></script>
 <script>
@@ -157,6 +158,20 @@ async function drawSettingsPage(){
     </div>
 
     <div class="settings-section">
+      <h3>قفل PIN</h3>
+      <div class="sub" style="margin-bottom:8px;font-size:.8rem;line-height:1.5;">
+        با فعال‌سازی PIN، بعد از خروج از برنامه یا رفتن به پس‌زمینه، برای ورود دوباره باید کد شش‌رقمی را وارد کنید. PIN روی همین دستگاه در localStorage ذخیره می‌شود (هش‌شده) و داخل Backup نیست.
+      </div>
+      <div id="pin-settings-status" class="card" style="margin-bottom:10px;"></div>
+      <div class="btn-row">
+        <button type="button" class="btn small" id="pin-set-btn">تنظیم PIN</button>
+        <button type="button" class="btn small secondary" id="pin-change-btn">تغییر PIN</button>
+        <button type="button" class="btn small secondary" id="pin-clear-btn">حذف PIN</button>
+        <button type="button" class="btn small secondary" id="pin-lock-now-btn">قفل اکنون</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-tech-row" id="open-tech-info" role="button" tabindex="0">
         <span class="tech-label">⚙️ اطلاعات فنی</span>
         <span class="tech-chevron">‹</span>
@@ -223,6 +238,74 @@ async function drawSettingsPage(){
       `);
     };
   }
+
+  /* PIN settings UI — uses window.pinLock only; no CRM data changes */
+  (function bindPinSettings(){
+    const statusEl = document.getElementById('pin-settings-status');
+    function refreshPinStatus(){
+      if(!statusEl) return;
+      const set = window.pinLock && typeof window.pinLock.isPinSet === 'function' && window.pinLock.isPinSet();
+      statusEl.innerHTML = set
+        ? '<div class="label">وضعیت</div><div class="value accent-olive" style="font-size:.95rem;">PIN فعال است</div>'
+        : '<div class="label">وضعیت</div><div class="value" style="font-size:.95rem;">PIN تنظیم نشده</div>';
+    }
+    refreshPinStatus();
+    const setBtn = document.getElementById('pin-set-btn');
+    const changeBtn = document.getElementById('pin-change-btn');
+    const clearBtn = document.getElementById('pin-clear-btn');
+    const lockBtn = document.getElementById('pin-lock-now-btn');
+    if(setBtn) setBtn.onclick = async ()=>{
+      if(!window.pinLock){ showToast('ماژول PIN در دسترس نیست'); return; }
+      if(window.pinLock.isPinSet()){ showToast('PIN از قبل فعال است؛ از «تغییر» استفاده کنید'); return; }
+      const a = prompt('PIN شش‌رقمی جدید:');
+      if(a==null) return;
+      const b = prompt('تکرار PIN:');
+      if(b==null) return;
+      if(String(a).replace(/\D/g,'').slice(0,6) !== String(b).replace(/\D/g,'').slice(0,6)){
+        showToast('دو PIN یکسان نیستند'); return;
+      }
+      try{
+        await window.pinLock.setPin(a);
+        showToast('PIN ذخیره شد');
+        refreshPinStatus();
+      }catch(e){ showToast(e && e.message ? e.message : 'خطا در تنظیم PIN'); }
+    };
+    if(changeBtn) changeBtn.onclick = async ()=>{
+      if(!window.pinLock){ showToast('ماژول PIN در دسترس نیست'); return; }
+      if(!window.pinLock.isPinSet()){ showToast('ابتدا PIN را تنظیم کنید'); return; }
+      const oldP = prompt('PIN فعلی:');
+      if(oldP==null) return;
+      const n1 = prompt('PIN جدید (۶ رقم):');
+      if(n1==null) return;
+      const n2 = prompt('تکرار PIN جدید:');
+      if(n2==null) return;
+      if(String(n1).replace(/\D/g,'').slice(0,6) !== String(n2).replace(/\D/g,'').slice(0,6)){
+        showToast('دو PIN جدید یکسان نیستند'); return;
+      }
+      try{
+        await window.pinLock.changePin(oldP, n1);
+        showToast('PIN تغییر کرد');
+        refreshPinStatus();
+      }catch(e){ showToast(e && e.message ? e.message : 'خطا در تغییر PIN'); }
+    };
+    if(clearBtn) clearBtn.onclick = async ()=>{
+      if(!window.pinLock){ showToast('ماژول PIN در دسترس نیست'); return; }
+      if(!window.pinLock.isPinSet()){ showToast('PIN فعال نیست'); return; }
+      const cur = prompt('برای حذف PIN، PIN فعلی را وارد کنید:');
+      if(cur==null) return;
+      try{
+        await window.pinLock.clearPin(cur);
+        showToast('PIN حذف شد');
+        refreshPinStatus();
+      }catch(e){ showToast(e && e.message ? e.message : 'خطا در حذف PIN'); }
+    };
+    if(lockBtn) lockBtn.onclick = ()=>{
+      if(!window.pinLock){ showToast('ماژول PIN در دسترس نیست'); return; }
+      if(!window.pinLock.isPinSet()){ showToast('ابتدا PIN را تنظیم کنید'); return; }
+      window.pinLock.lock();
+      window.pinLock.ensureUnlocked();
+    };
+  })();
 }
 
 function render(){ drawSettingsPage(); }
