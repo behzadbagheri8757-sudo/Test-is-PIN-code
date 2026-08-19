@@ -7,6 +7,12 @@
 
   var STORAGE_KEY = 'baqeri_pin_lock_v1';
   var ATTEMPTS_KEY = 'baqeri_pin_attempts_v1';
+  /* Session unlock survives multi-page navigations inside the app (same tab).
+     Cleared only on real background / Lock Now / process kill. */
+  var SESSION_UNLOCK_KEY = 'baqeri_pin_session_ok';
+  var HIDDEN_AT_KEY = 'baqeri_pin_hidden_at';
+  /* Gaps shorter than this are treated as in-app navigation, not real leave. */
+  var BACKGROUND_LOCK_MS = 2500;
   var MAX_ATTEMPTS_BEFORE_DELAY = 5;
   var DELAY_MS = 30000;
 
@@ -38,6 +44,21 @@
 
   function isPinSet() {
     return !!readStore();
+  }
+
+  function hasSessionUnlock() {
+    try { return sessionStorage.getItem(SESSION_UNLOCK_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  function markSessionUnlocked() {
+    try { sessionStorage.setItem(SESSION_UNLOCK_KEY, '1'); } catch (e) {}
+    try { sessionStorage.removeItem(HIDDEN_AT_KEY); } catch (e) {}
+    isUnlocked = true;
+  }
+
+  function clearSessionUnlocked() {
+    try { sessionStorage.removeItem(SESSION_UNLOCK_KEY); } catch (e) {}
+    isUnlocked = false;
   }
 
   function bytesToHex(buf) {
@@ -214,7 +235,7 @@
       verifyPin(pin).then(function (ok) {
         if (ok) {
           clearAttempts();
-          isUnlocked = true;
+          markSessionUnlocked();
           hideOverlay();
           resolveWaiters();
         } else {
@@ -266,7 +287,7 @@
     return hashPin(pin, salt).then(function (hash) {
       writeStore({ v: 1, salt: salt, hash: hash });
       clearAttempts();
-      isUnlocked = true;
+      markSessionUnlocked();
       return true;
     });
   }
@@ -290,7 +311,7 @@
     return verifyPin(currentPin).then(function (ok) {
       if (!ok) return Promise.reject(new Error('PIN فعلی نادرست است'));
       clearStore();
-      isUnlocked = true;
+      markSessionUnlocked();
       hideOverlay();
       return true;
     });
@@ -298,13 +319,20 @@
 
   function lock() {
     if (!isPinSet()) return;
-    isUnlocked = false;
+    /* Explicit lock (Lock Now) or confirmed long background — end session unlock */
+    clearSessionUnlocked();
     /* Cover immediately so iOS App Switcher snapshot is less likely to show CRM */
     showCoverOnly();
   }
 
   function ensureUnlocked() {
     if (!isPinSet()) {
+      isUnlocked = true;
+      hideOverlay();
+      return Promise.resolve();
+    }
+    /* Restore unlock across multi-page navigations in the same browser session */
+    if (hasSessionUnlock()) {
       isUnlocked = true;
       hideOverlay();
       return Promise.resolve();
@@ -319,28 +347,47 @@
     });
   }
 
+  function onPossiblyReturnedFromBackground() {
+    if (!isPinSet()) return;
+    var hiddenAt = 0;
+    try { hiddenAt = Number(sessionStorage.getItem(HIDDEN_AT_KEY) || 0) || 0; } catch (e) {}
+    try { sessionStorage.removeItem(HIDDEN_AT_KEY); } catch (e) {}
+    var elapsed = hiddenAt ? (Date.now() - hiddenAt) : 0;
+    /* Short gap ≈ in-app page change; long gap ≈ Home / app switch / lock screen */
+    if (elapsed >= BACKGROUND_LOCK_MS) {
+      clearSessionUnlocked();
+    } else if (hasSessionUnlock()) {
+      isUnlocked = true;
+    }
+    if (!isUnlocked && !hasSessionUnlock()) {
+      showUnlockUI();
+    } else {
+      hideOverlay();
+    }
+  }
+
   function bindLifecycle() {
     if (listenersBound) return;
     listenersBound = true;
 
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'hidden' || document.hidden) {
-        lock();
+        try { sessionStorage.setItem(HIDDEN_AT_KEY, String(Date.now())); } catch (e) {}
+        /* Cover for snapshot only — do NOT clear session here (in-app nav also goes hidden) */
+        if (isPinSet()) showCoverOnly();
       } else if (document.visibilityState === 'visible') {
-        if (isPinSet() && !isUnlocked) {
-          showUnlockUI();
-        }
+        onPossiblyReturnedFromBackground();
       }
     });
 
+    /* pagehide: cover for snapshot; do not clear session (fires on every internal link) */
     window.addEventListener('pagehide', function () {
-      lock();
+      try { sessionStorage.setItem(HIDDEN_AT_KEY, String(Date.now())); } catch (e) {}
+      if (isPinSet()) showCoverOnly();
     });
 
     window.addEventListener('pageshow', function () {
-      if (isPinSet() && !isUnlocked) {
-        showUnlockUI();
-      }
+      onPossiblyReturnedFromBackground();
     });
   }
 
@@ -355,15 +402,19 @@
 
   bindLifecycle();
 
-  /* If PIN already set on cold start, cover immediately before boot paints CRM */
+  /* Cold start / new page: honor session unlock so in-app navigation does not re-ask PIN */
   if (isPinSet()) {
-    isUnlocked = false;
-    if (document.body) {
-      showCoverOnly();
+    if (hasSessionUnlock()) {
+      isUnlocked = true;
     } else {
-      document.addEventListener('DOMContentLoaded', function () {
-        if (!isUnlocked && isPinSet()) showCoverOnly();
-      });
+      isUnlocked = false;
+      if (document.body) {
+        showCoverOnly();
+      } else {
+        document.addEventListener('DOMContentLoaded', function () {
+          if (!isUnlocked && isPinSet() && !hasSessionUnlock()) showCoverOnly();
+        });
+      }
     }
   }
 
