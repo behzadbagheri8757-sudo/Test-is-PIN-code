@@ -154,17 +154,35 @@
     var st = document.createElement('style');
     st.id = 'pin-lock-style';
     st.textContent =
-      '#pin-lock-overlay{position:fixed;inset:0;z-index:99999;background:#0B1F3A;display:flex;align-items:center;justify-content:center;padding:20px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Tahoma,sans-serif;}' +
+      '#pin-lock-overlay{position:fixed;inset:0;z-index:99999;background:#0B1F3A;display:flex;align-items:center;justify-content:center;padding:20px;' +
+        'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Tahoma,sans-serif;-webkit-font-smoothing:antialiased;}' +
       '#pin-lock-overlay[hidden]{display:none !important;}' +
-      '#pin-lock-overlay .pin-box{width:100%;max-width:320px;background:#fff;border-radius:16px;padding:22px 18px 18px;box-shadow:0 12px 40px rgba(0,0,0,.35);text-align:center;}' +
-      '#pin-lock-overlay .pin-title{font-size:1.05rem;font-weight:800;color:#0B1F3A;margin:0 0 6px;}' +
-      '#pin-lock-overlay .pin-sub{font-size:.78rem;color:#6A7383;margin:0 0 14px;line-height:1.5;}' +
-      '#pin-lock-overlay .pin-input{width:100%;box-sizing:border-box;font-size:1.4rem;letter-spacing:.35em;text-align:center;padding:12px 10px;border:1.5px solid #E2E7EE;border-radius:12px;font-family:inherit;min-height:48px;}' +
-      '#pin-lock-overlay .pin-input:focus{outline:none;border-color:#20A879;box-shadow:0 0 0 3px #E7F6F0;}' +
-      '#pin-lock-overlay .pin-err{color:#E04545;font-size:.8rem;font-weight:700;min-height:1.2em;margin:10px 0 0;}' +
-      '#pin-lock-overlay .pin-btn{width:100%;margin-top:12px;padding:12px;border:none;border-radius:12px;background:#20A879;color:#fff;font-weight:800;font-size:.92rem;font-family:inherit;min-height:48px;cursor:pointer;}' +
-      '#pin-lock-overlay .pin-btn:disabled{opacity:.45;cursor:not-allowed;}' +
-      '#pin-lock-overlay .pin-cover-only{color:#fff;font-size:.95rem;font-weight:700;text-align:center;}';
+      '#pin-lock-overlay .pin-box{width:100%;max-width:340px;background:#fff;border-radius:20px;padding:28px 20px 22px;' +
+        'box-shadow:0 16px 48px rgba(0,0,0,.28);text-align:center;}' +
+      '#pin-lock-overlay .pin-lock-icon{width:44px;height:44px;margin:0 auto 14px;border-radius:12px;background:#E7F6F0;' +
+        'display:flex;align-items:center;justify-content:center;color:#20A879;font-size:1.25rem;}' +
+      '#pin-lock-overlay .pin-title{font-size:1.1rem;font-weight:800;color:#0B1F3A;margin:0 0 6px;letter-spacing:-0.01em;}' +
+      '#pin-lock-overlay .pin-sub{font-size:.8rem;color:#6A7383;margin:0 0 20px;line-height:1.55;}' +
+      '#pin-lock-overlay .pin-cells-wrap{position:relative;margin:0 auto 4px;max-width:280px;}' +
+      '#pin-lock-overlay .pin-cells{display:flex;gap:8px;justify-content:center;direction:ltr;}' +
+      '#pin-lock-overlay .pin-cell{width:40px;height:48px;border-radius:12px;border:1.5px solid #E2E7EE;background:#F7F9FC;' +
+        'display:flex;align-items:center;justify-content:center;font-size:1.25rem;font-weight:700;color:#0B1F3A;' +
+        'transition:border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .12s ease;}' +
+      '#pin-lock-overlay .pin-cell.filled{border-color:#C5E8DA;background:#F0FAF6;}' +
+      '#pin-lock-overlay .pin-cell.active{border-color:#20A879;background:#fff;box-shadow:0 0 0 3px #E7F6F0;transform:scale(1.06);}' +
+      '#pin-lock-overlay .pin-cell .dot{width:10px;height:10px;border-radius:50%;background:#0B1F3A;display:inline-block;}' +
+      '#pin-lock-overlay .pin-cell .digit{opacity:1;transition:opacity .2s ease;}' +
+      '#pin-lock-overlay .pin-input-real{position:absolute;inset:0;width:100%;height:100%;opacity:0.02;border:0;background:transparent;' +
+        'color:transparent;caret-color:transparent;font-size:16px;z-index:2;}' +
+      '#pin-lock-overlay .pin-err{color:#E04545;font-size:.8rem;font-weight:700;min-height:1.25em;margin:12px 0 0;}' +
+      '#pin-lock-overlay .pin-btn{width:100%;margin-top:14px;padding:14px;border:none;border-radius:14px;background:#20A879;color:#fff;' +
+        'font-weight:800;font-size:.95rem;font-family:inherit;min-height:50px;cursor:pointer;' +
+        'transition:opacity .15s ease, background .15s ease, transform .1s ease;}' +
+      '#pin-lock-overlay .pin-btn:disabled{opacity:.4;cursor:not-allowed;background:#9AA3B2;}' +
+      '#pin-lock-overlay .pin-btn:not(:disabled):active{transform:scale(0.98);}' +
+      '#pin-lock-overlay .pin-box.shake{animation:pinShake .4s ease;}' +
+      '@keyframes pinShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}' +
+      '#pin-lock-overlay .pin-cover-only{color:#fff;font-size:1rem;font-weight:700;text-align:center;opacity:.9;}';
     document.head.appendChild(st);
   }
 
@@ -188,21 +206,63 @@
     }
     overlayEl.hidden = false;
     var lockLeft = remainingLockMs();
+    var cellsHtml = '';
+    for (var ci = 0; ci < 6; ci++) {
+      cellsHtml += '<div class="pin-cell" data-i="' + ci + '"></div>';
+    }
     overlayEl.innerHTML =
-      '<div class="pin-box" dir="rtl">' +
+      '<div class="pin-box" id="pin-lock-card" dir="rtl">' +
+        '<div class="pin-lock-icon" aria-hidden="true">🔒</div>' +
         '<div class="pin-title">ورود با PIN</div>' +
         '<div class="pin-sub">کد شش‌رقمی را وارد کنید</div>' +
-        '<input class="pin-input" id="pin-lock-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" autocapitalize="off" spellcheck="false">' +
+        '<div class="pin-cells-wrap">' +
+          '<div class="pin-cells" id="pin-lock-cells">' + cellsHtml + '</div>' +
+          '<input class="pin-input-real" id="pin-lock-input" type="tel" inputmode="numeric" pattern="[0-9]*" ' +
+            'maxlength="6" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" enterkeyhint="done">' +
+        '</div>' +
         '<div class="pin-err" id="pin-lock-err"></div>' +
-        '<button type="button" class="pin-btn" id="pin-lock-submit">ورود</button>' +
+        '<button type="button" class="pin-btn" id="pin-lock-submit" disabled>ورود</button>' +
       '</div>';
 
     var input = document.getElementById('pin-lock-input');
     var err = document.getElementById('pin-lock-err');
     var btn = document.getElementById('pin-lock-submit');
+    var cells = overlayEl.querySelectorAll('.pin-cell');
+    var card = document.getElementById('pin-lock-card');
+    var revealTimers = [];
 
     function setErr(msg) {
       if (err) err.textContent = msg || '';
+    }
+
+    function clearRevealTimers() {
+      for (var t = 0; t < revealTimers.length; t++) {
+        try { clearTimeout(revealTimers[t]); } catch (e) {}
+      }
+      revealTimers = [];
+    }
+
+    function paintCells(pin, opts) {
+      opts = opts || {};
+      var len = pin.length;
+      for (var i = 0; i < 6; i++) {
+        var cell = cells[i];
+        if (!cell) continue;
+        cell.className = 'pin-cell';
+        if (i < len) cell.classList.add('filled');
+        if (i === len && len < 6) cell.classList.add('active');
+        cell.innerHTML = '';
+        if (i < len) {
+          if (opts.revealIndex === i) {
+            cell.innerHTML = '<span class="digit">' + pin.charAt(i) + '</span>';
+          } else {
+            cell.innerHTML = '<span class="dot"></span>';
+          }
+        }
+      }
+      if (btn && remainingLockMs() <= 0) {
+        btn.disabled = len !== 6;
+      }
     }
 
     function applyLockoutState() {
@@ -217,12 +277,14 @@
         }, Math.min(left, 1000));
         return true;
       }
-      if (btn) btn.disabled = false;
       if (input) input.disabled = false;
+      var pinNow = normalizePin(input && input.value);
+      if (btn) btn.disabled = pinNow.length !== 6;
       return false;
     }
 
     if (lockLeft > 0) applyLockoutState();
+    else paintCells('');
 
     function trySubmit() {
       if (applyLockoutState()) return;
@@ -241,12 +303,18 @@
         } else {
           recordFailedAttempt();
           setErr('PIN نادرست است');
+          clearRevealTimers();
           if (input) {
             input.value = '';
+            paintCells('');
             try { input.focus(); } catch (e) {}
           }
+          if (card) {
+            card.classList.remove('shake');
+            void card.offsetWidth;
+            card.classList.add('shake');
+          }
           applyLockoutState();
-          if (btn && remainingLockMs() <= 0) btn.disabled = false;
         }
       }).catch(function () {
         setErr('خطا در بررسی PIN');
@@ -254,17 +322,47 @@
       });
     }
 
+    function onInput() {
+      if (applyLockoutState()) return;
+      var pin = normalizePin(input.value);
+      if (input.value !== pin) input.value = pin;
+      setErr('');
+      clearRevealTimers();
+      var last = pin.length - 1;
+      paintCells(pin, { revealIndex: last >= 0 ? last : -1 });
+      if (last >= 0) {
+        revealTimers.push(setTimeout(function () {
+          paintCells(normalizePin(input.value), {});
+        }, 280));
+      }
+      if (pin.length === 6) {
+        /* auto-submit after short beat so last digit can flash */
+        revealTimers.push(setTimeout(function () {
+          if (normalizePin(input.value).length === 6 && !isUnlocked) trySubmit();
+        }, 120));
+      }
+    }
+
     if (btn) btn.addEventListener('click', trySubmit);
     if (input) {
+      input.addEventListener('input', onInput);
       input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
           e.preventDefault();
           trySubmit();
         }
       });
+      /* tap cells → focus real input (helps iOS) */
+      if (cells && cells.length) {
+        for (var k = 0; k < cells.length; k++) {
+          cells[k].addEventListener('click', function () {
+            try { input.focus(); } catch (e) {}
+          });
+        }
+      }
       setTimeout(function () {
         try { input.focus(); } catch (e) {}
-      }, 50);
+      }, 80);
     }
   }
 
