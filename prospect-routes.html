@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>مسیرهای ارزیابی</title>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-page="prospects">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>مسیرها و محله‌های ارزیابی مغازه‌ها</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script src="./js/prospect-scoring.js"></script>
+<script src="./js/prospect-db.js"></script>
+<script src="./js/prospect-core.js"></script>
+<script>
+function drawRoutes(){
+  const main=document.getElementById('main');
+  const routes=prospectState.routes;
+  main.innerHTML=`
+    <div class="btn-row" style="margin-bottom:10px;">
+      <a class="btn secondary small" href="./prospects.html">← مغازه‌های بالقوه</a>
+    </div>
+    <h2 class="section-title">مسیرها</h2>
+    <div class="field"><label>مسیر جدید</label>
+      <div class="btn-row">
+        <input id="new-route" placeholder="مثلاً: مسیر غرب" style="flex:1;">
+        <button type="button" class="btn small" id="add-route">افزودن</button>
+      </div>
+    </div>
+    <div id="route-list"></div>
+  `;
+  const list=document.getElementById('route-list');
+  if(!routes.length){
+    list.innerHTML='<div class="empty">هنوز مسیری نیست</div>';
+  } else {
+    list.innerHTML=routes.map(r=>{
+      const count=prospectState.shops.filter(s=>s.routeId===r.id).length;
+      const neigh=(r.neighborhoods||[]).map(n=>`<span class="badge" style="margin:2px;">${esc(n.name)}</span>`).join(' ')||'<span class="sub">بدون محله</span>';
+      return `<div class="card" style="margin-bottom:10px;" data-route="${esc(r.id)}">
+        <div style="font-weight:800;">${esc(r.name)} <span class="sub">(${count} مغازه)</span></div>
+        <div style="margin:8px 0;">${neigh}</div>
+        <div class="btn-row">
+          <button type="button" class="btn small secondary" data-add-neigh="${esc(r.id)}">+ محله</button>
+          <button type="button" class="btn small danger" data-del-route="${esc(r.id)}">حذف مسیر</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+  document.getElementById('add-route').onclick=async ()=>{
+    const name=(document.getElementById('new-route').value||'').trim();
+    if(!name){showToast('نام مسیر را وارد کن');return;}
+    await addProspectRoute(name);
+    showToast('مسیر اضافه شد');
+    drawRoutes();
+  };
+  list.querySelectorAll('[data-add-neigh]').forEach(btn=>{
+    btn.onclick=async ()=>{
+      const name=prompt('نام محله / خیابان:');
+      if(!name||!name.trim()) return;
+      await addProspectNeighborhood(btn.getAttribute('data-add-neigh'), name.trim());
+      showToast('محله اضافه شد');
+      drawRoutes();
+    };
+  });
+  list.querySelectorAll('[data-del-route]').forEach(btn=>{
+    btn.onclick=async ()=>{
+      if(!confirm('این مسیر حذف شود؟')) return;
+      await deleteProspectRoute(btn.getAttribute('data-del-route'));
+      showToast('حذف شد');
+      drawRoutes();
+    };
+  });
+}
+bootProspectPage('prospects', drawRoutes);
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

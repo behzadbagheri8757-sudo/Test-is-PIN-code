@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>تنظیمات و بکاپ — حبوبات و خشکبار باقری</title>
+<script src="./vendor/xlsx.full.min.js"></script>
+<script src="./vendor/html2canvas.min.js"></script>
+<link rel="stylesheet" href="./css/app.css">
+<style>
+.settings-warn{
+  background:#FFF4E5;border:1px solid #F0C36A;border-radius:12px;padding:12px 14px;
+  font-size:.82rem;line-height:1.65;margin:10px 0 14px;color:#5C4A1F;
+}
+.settings-section{margin-bottom:22px;}
+.settings-section h3{font-size:1rem;margin:0 0 10px;font-weight:800;}
+.auto-backup-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px dotted var(--line);}
+.auto-backup-row:last-child{border-bottom:none;}
+.settings-tech-row{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:14px 16px;background:var(--color-surface,#fff);border:1px solid var(--color-border,#E2E7EE);
+  border-radius:12px;cursor:pointer;min-height:48px;-webkit-tap-highlight-color:transparent;user-select:none;
+}
+.settings-tech-row:active{background:var(--color-surface-2,#EEF1F5);}
+.settings-tech-row .tech-label{font-weight:700;font-size:.9rem;color:var(--color-primary,#0B1F3A);}
+.settings-tech-row .tech-chevron{color:var(--color-text-muted,#6A7383);font-size:1.1rem;font-weight:700;}
+</style>
+</head>
+<body data-page="settings">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>تنظیمات، بکاپ و بازیابی</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script>
+/* Phase 11 — settings UI only. Uses existing backup.js APIs unchanged. */
+
+function countCustomerVisits(){
+  return (data.customers||[]).reduce((s,c)=>s+((c.visits||[]).length),0);
+}
+
+function storageStatusLabel(){
+  try{
+    if(typeof indexedDB === 'undefined') return 'IndexedDB در دسترس نیست';
+    return 'IndexedDB فعال (baqeriDB)';
+  }catch(e){
+    return 'نامشخص';
+  }
+}
+
+async function hasPreRestoreSnapshot(){
+  try{
+    const snap = await dbGet(PRERESTORE_KEY);
+    return !!(snap && snap.value);
+  }catch(e){ return false; }
+}
+
+async function drawSettingsPage(){
+  const main = document.getElementById('main');
+  if(!main) return;
+
+  const visitCount = countCustomerVisits();
+  let autoList = [];
+  try{ autoList = await getAutoBackupList(); }catch(e){ autoList = []; }
+  const canUndo = await hasPreRestoreSnapshot();
+
+  let autoHtml = '';
+  if(!autoList.length){
+    autoHtml = '<div class="empty" style="padding:8px 0;">هنوز بکاپ خودکاری ذخیره نشده (هر ۱۲ ساعت حداکثر یک نسخه، تا ۵ نسخه).</div>';
+  } else {
+    autoHtml = autoList.slice().reverse().map(item=>{
+      const when = item.ts ? new Date(item.ts).toLocaleString('fa-IR') : '—';
+      return `<div class="auto-backup-row">
+        <span class="name" style="font-size:.85rem;">${esc(when)}</span>
+        <button type="button" class="btn small secondary" data-auto-key="${esc(item.key)}">بازیابی این نسخه</button>
+      </div>`;
+    }).join('');
+  }
+
+  main.innerHTML = `
+    <h2 class="section-title">تنظیمات و بکاپ</h2>
+
+    <div class="settings-section">
+      <h3>Backup</h3>
+      <div class="settings-warn">
+        فایل JSON را در جایی امن نگه دارید (Files / ابر / کامپیوتر). روی iPhone معمولاً برگه Share و «Save to Files» باز می‌شود.
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn" id="export-json">دریافت Backup (JSON)</button>
+        <button type="button" class="btn secondary" id="export-excel">خروجی اکسل</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h3>Restore از فایل</h3>
+      <div class="settings-warn">
+        بازیابی، اطلاعات فعلی را <b>جایگزین</b> می‌کند. قبل از جایگزینی، نسخهٔ فعلی به‌صورت خودکار برای «برگشت از بازیابی» ذخیره می‌شود.
+      </div>
+      <div class="field"><label>انتخاب فایل بکاپ JSON</label>
+        <input type="file" id="import-file" accept="application/json,.json">
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn danger" id="do-import">بازیابی و جایگزینی</button>
+        <button type="button" class="btn secondary" id="undo-import" ${canUndo?'':'disabled'}>
+          بازگشت به نسخه قبل از آخرین بازیابی
+        </button>
+      </div>
+      <div class="sub" style="margin-top:8px;font-size:.78rem;">
+        ${canUndo
+          ? 'نسخهٔ قبل از آخرین Restore در دسترس است و می‌توانید برگردید.'
+          : 'هنوز نسخهٔ قبل از Restore ذخیره نشده (بعد از یک بازیابی موفق فعال می‌شود).'}
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <h3>بکاپ خودکار داخلی</h3>
+      <div class="sub" style="margin-bottom:8px;font-size:.8rem;line-height:1.5;">
+        برنامه در صورت استفاده، حداکثر هر ۱۲ ساعت یک نسخه داخل IndexedDB نگه می‌دارد (تا ۵ نسخه). این جایگزین Backup فایل JSON نیست.
+      </div>
+      <div class="card">${autoHtml}</div>
+    </div>
+
+    <div class="settings-section">
+      <h3>آمار دادهٔ فعلی</h3>
+      <div class="cards">
+        <div class="card"><div class="label">مشتریان</div><div class="value">${(data.customers||[]).length}</div></div>
+        <div class="card"><div class="label">کالاها</div><div class="value">${(data.products||[]).length}</div></div>
+        <div class="card"><div class="label">فاکتورها</div><div class="value">${(data.invoices||[]).length}</div></div>
+        <div class="card"><div class="label">تأمین‌کنندگان</div><div class="value">${(data.suppliers||[]).length}</div></div>
+        <div class="card"><div class="label">پرداخت‌ها</div><div class="value">${(data.payments||[]).length}</div></div>
+        <div class="card"><div class="label">چک‌ها</div><div class="value">${(data.checks||[]).length}</div></div>
+        <div class="card wide"><div class="label">ویزیت مشتریان</div><div class="value">${visitCount}</div></div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-tech-row" id="open-tech-info" role="button" tabindex="0">
+        <span class="tech-label">⚙️ اطلاعات فنی</span>
+        <span class="tech-chevron">‹</span>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('export-json').onclick = () => exportBackupJSON();
+  document.getElementById('export-excel').onclick = () => exportExcel();
+
+  document.getElementById('do-import').onclick = async () => {
+    const f = document.getElementById('import-file').files[0];
+    if(!f){ showToast('فایل را انتخاب کنید'); return; }
+    const ok = confirm(
+      'اطلاعات فعلی با محتوای این فایل جایگزین شود؟\n\n' +
+      'قبل از جایگزینی، وضعیت فعلی برای «برگشت از بازیابی» ذخیره می‌شود.\n' +
+      'فایل: ' + f.name
+    );
+    if(!ok) return;
+    await importBackupJSON(f);
+    location.reload();
+  };
+
+  document.getElementById('undo-import').onclick = async () => {
+    if(!(await hasPreRestoreSnapshot())){
+      showToast('نسخه‌ی قبل از بازیابی موجود نیست');
+      return;
+    }
+    if(!confirm('به حالت قبل از آخرین بازیابی برگردیم؟')) return;
+    await undoLastRestore();
+    location.reload();
+  };
+
+  main.querySelectorAll('[data-auto-key]').forEach(btn=>{
+    btn.onclick = async () => {
+      await restoreFromAutoBackup(btn.getAttribute('data-auto-key'));
+      location.reload();
+    };
+  });
+
+  const techRow = document.getElementById('open-tech-info');
+  if(techRow){
+    techRow.onclick = () => {
+      const schema = data.schemaVersion != null ? data.schemaVersion : '—';
+      const seq = data.invoiceSeq != null ? data.invoiceSeq : '—';
+      openSheet(`
+        <h3>اطلاعات فنی</h3>
+        <div class="cards" style="margin-top:4px;">
+          <div class="card wide"><div class="label">نام</div>
+            <div class="value" style="font-size:1rem;">حبوبات و خشکبار باقری — دفتر حساب</div></div>
+          <div class="card"><div class="label">نسخه معماری</div>
+            <div class="value" style="font-size:.95rem;">چندصفحه‌ای · فاز ۱۱</div></div>
+          <div class="card"><div class="label">schemaVersion</div>
+            <div class="value">${esc(String(schema))}</div></div>
+          <div class="card wide"><div class="label">ذخیره‌سازی محلی</div>
+            <div class="value" style="font-size:.9rem;">${esc(storageStatusLabel())}</div>
+            <div class="sub" style="margin-top:4px;">DB: baqeriDB · store: appdata · کلید: main</div>
+          </div>
+          <div class="card"><div class="label">سری فاکتور</div><div class="value">${esc(String(seq))}</div></div>
+        </div>
+        <div class="report-note" style="font-size:.78rem;color:var(--ink-soft);margin-top:12px;line-height:1.55;">
+          برنامه آفلاین است. داده‌ها روی همین دستگاه ذخیره می‌شوند. برای امنیت، به‌طور منظم Backup بگیرید.
+        </div>
+      `);
+    };
+  }
+}
+
+function render(){ drawSettingsPage(); }
+
+bootPage('settings', function(){
+  drawSettingsPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

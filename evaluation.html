@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>ثبت ارزیابی مغازه</title>
+<link rel="stylesheet" href="./css/app.css">
+<style>
+.chip-wrap{display:flex;flex-wrap:wrap;gap:8px;}
+.chip-opt{
+  border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:11px;
+  padding:10px 12px;font-size:.85rem;cursor:pointer;font-family:inherit;text-align:right;
+}
+.chip-opt.selected{background:var(--olive-dark);border-color:var(--olive-dark);color:#fff;font-weight:700;}
+.live-score{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:12px;background:var(--card);}
+.live-score .num{font-size:1.6rem;font-weight:800;}
+.rank-badge{padding:4px 12px;border-radius:20px;color:#fff;font-weight:800;}
+.q-block{margin-bottom:16px;padding-bottom:14px;border-bottom:1px dashed var(--line);}
+.q-title{font-weight:700;margin-bottom:8px;font-size:.9rem;}
+</style>
+</head>
+<body data-page="prospects">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>ثبت ارزیابی / ویزیت مغازه بالقوه</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script src="./js/prospect-scoring.js"></script>
+<script src="./js/prospect-db.js"></script>
+<script src="./js/prospect-core.js"></script>
+<script>
+const formState={
+  mode:'new', // new | visit
+  shopId:null,
+  name:'',
+  routeId:null,
+  neighborhoodId:null,
+  answers:{},
+  tags:[],
+};
+
+function updateLive(){
+  const score=prospectComputeScore(formState.answers);
+  const rank=prospectScoreToRank(score);
+  const info=PROSPECT_RANK_INFO[rank];
+  const n=prospectAnsweredCount(formState.answers);
+  const val=document.getElementById('live-score-value');
+  const sub=document.getElementById('live-score-sub');
+  const rk=document.getElementById('live-score-rank');
+  if(val) val.textContent=score;
+  if(sub) sub.textContent=n+' از '+PROSPECT_QUESTIONS.length+' سؤال';
+  if(rk){ rk.textContent=rank; rk.style.background=info.color; }
+  const btn=document.getElementById('save-eval');
+  if(btn){
+    const nameOk=formState.mode==='visit'?true:formState.name.trim().length>0;
+    const ansOk=n===PROSPECT_QUESTIONS.length;
+    const routeOk=formState.mode==='visit'?true:!!formState.routeId;
+    btn.disabled=!(nameOk&&ansOk&&routeOk);
+  }
+}
+
+function drawEvaluation(){
+  const main=document.getElementById('main');
+  const shopId=getQueryParam('shopId');
+  if(shopId){
+    const shop=prospectState.shops.find(s=>s.id===shopId);
+    if(shop){
+      formState.mode='visit';
+      formState.shopId=shopId;
+      formState.name=shop.name;
+      formState.routeId=shop.routeId;
+      formState.neighborhoodId=shop.neighborhoodId;
+    }
+  }
+
+  if(formState.mode==='new' && prospectState.routes.length===0){
+    main.innerHTML=`<h2 class="section-title">ثبت مغازه</h2>
+      <div class="empty">اول حداقل یک مسیر بسازید.</div>
+      <a class="btn" href="./prospect-routes.html">ساخت مسیر</a>`;
+    return;
+  }
+
+  const isVisit=formState.mode==='visit';
+  let neighChips='';
+  if(formState.routeId){
+    const r=prospectState.routes.find(x=>x.id===formState.routeId);
+    if(r&&r.neighborhoods.length){
+      neighChips=r.neighborhoods.map(n=>
+        `<button type="button" class="chip-opt ${formState.neighborhoodId===n.id?'selected':''}" data-group="neighborhood" data-value="${esc(n.id)}">${esc(n.name)}</button>`
+      ).join('');
+    } else neighChips='<span class="sub">محله‌ای تعریف نشده</span>';
+  }
+
+  const qHtml=PROSPECT_QUESTIONS.map((q,idx)=>{
+    const opts=q.options.map(o=>
+      `<button type="button" class="chip-opt ${formState.answers[q.id]===o.key?'selected':''}" data-group="${q.id}" data-value="${esc(o.key)}">${esc(o.label)}</button>`
+    ).join('');
+    return `<div class="q-block"><div class="q-title">${idx+1}. ${esc(q.label)}</div><div class="chip-wrap">${opts}</div></div>`;
+  }).join('');
+
+  const tagHtml=PROSPECT_VISIT_TAGS.map(t=>
+    `<button type="button" class="chip-opt ${formState.tags.includes(t.key)?'selected':''}" data-group="tags" data-value="${esc(t.key)}" data-multi="1">${esc(t.label)}</button>`
+  ).join('');
+
+  const score=prospectComputeScore(formState.answers);
+  const rank=prospectScoreToRank(score);
+  const info=PROSPECT_RANK_INFO[rank];
+
+  main.innerHTML=`
+    <div class="btn-row" style="margin-bottom:10px;">
+      <a class="btn secondary small" href="./prospects.html">← لیست</a>
+    </div>
+    <h2 class="section-title">${isVisit?'ثبت ویزیت / ارزیابی':'ثبت مغازه + ارزیابی'}</h2>
+    ${isVisit
+      ? `<div class="card" style="margin-bottom:12px;"><b>${esc(formState.name)}</b>
+          <div class="sub">${esc(prospectRouteName(formState.routeId))} — ${esc(prospectNeighborhoodName(formState.routeId,formState.neighborhoodId))}</div></div>`
+      : `<div class="field"><label>نام مغازه</label><input id="shop-name" value="${esc(formState.name)}" autocomplete="off"></div>
+         <div class="field"><label>مسیر</label>
+           <div class="chip-wrap" id="route-chips">
+             ${prospectState.routes.map(r=>`<button type="button" class="chip-opt ${formState.routeId===r.id?'selected':''}" data-group="route" data-value="${esc(r.id)}">${esc(r.name)}</button>`).join('')}
+           </div>
+         </div>
+         <div class="field" id="neigh-wrap" style="${formState.routeId?'':'display:none'}">
+           <label>محله (اختیاری)</label>
+           <div class="chip-wrap" id="neigh-chips">${neighChips}</div>
+         </div>`
+    }
+    <div class="live-score">
+      <div><div class="num" id="live-score-value">${score}</div>
+        <div class="sub" id="live-score-sub">${prospectAnsweredCount(formState.answers)} از ${PROSPECT_QUESTIONS.length} سؤال</div></div>
+      <div style="text-align:left"><span class="rank-badge" id="live-score-rank" style="background:${info.color}">${rank}</span>
+        <div class="sub" style="margin-top:4px;max-width:160px;">${esc(info.desc)}</div></div>
+    </div>
+    <div class="card">${qHtml}</div>
+    <div class="card" style="margin-top:12px;">
+      <div class="label" style="margin-bottom:8px;">نتیجه این ویزیت (اختیاری)</div>
+      <div class="chip-wrap">${tagHtml}</div>
+    </div>
+    <div class="btn-row" style="margin-top:14px;">
+      <button type="button" class="btn" id="save-eval" disabled>${isVisit?'ثبت ویزیت':'ثبت مغازه'}</button>
+    </div>
+  `;
+
+  if(!isVisit){
+    const nameIn=document.getElementById('shop-name');
+    if(nameIn) nameIn.addEventListener('input',e=>{formState.name=e.target.value;updateLive();});
+  }
+
+  main.querySelectorAll('.chip-opt').forEach(el=>{
+    el.addEventListener('click',()=>{
+      const group=el.getAttribute('data-group');
+      const value=el.getAttribute('data-value');
+      const multi=el.getAttribute('data-multi')==='1';
+      if(group==='route'){
+        formState.routeId=value;
+        formState.neighborhoodId=null;
+        drawEvaluation();
+        return;
+      }
+      if(group==='neighborhood'){
+        formState.neighborhoodId=value;
+        main.querySelectorAll('[data-group="neighborhood"]').forEach(b=>b.classList.toggle('selected',b.getAttribute('data-value')===value));
+        return;
+      }
+      if(group==='tags'){
+        const i=formState.tags.indexOf(value);
+        if(i>=0) formState.tags.splice(i,1); else formState.tags.push(value);
+        el.classList.toggle('selected');
+        return;
+      }
+      if(group.startsWith('q')){
+        formState.answers[group]=value;
+        main.querySelectorAll('[data-group="'+group+'"]').forEach(b=>b.classList.toggle('selected',b.getAttribute('data-value')===value));
+        updateLive();
+      }
+    });
+  });
+
+  document.getElementById('save-eval').onclick=async ()=>{
+    const btn=document.getElementById('save-eval');
+    if(btn.disabled) return;
+    btn.disabled=true;
+    try{
+      if(formState.mode==='visit'){
+        const shop=await addProspectVisit(formState.shopId,{answers:formState.answers,tags:formState.tags});
+        if(typeof queueProspectTargetMilestoneMessage==='function'){
+          queueProspectTargetMilestoneMessage(prospectState.dailyTarget);
+        }
+        showToast('ویزیت ثبت شد');
+        location.href='./prospect.html?id='+encodeURIComponent(shop.id);
+      } else {
+        const shop=await createProspectShop({
+          name:formState.name,
+          routeId:formState.routeId,
+          neighborhoodId:formState.neighborhoodId,
+          answers:formState.answers,
+          tags:formState.tags,
+        });
+        if(typeof queueProspectTargetMilestoneMessage==='function'){
+          queueProspectTargetMilestoneMessage(prospectState.dailyTarget);
+        }
+        showToast('مغازه ثبت شد');
+        location.href='./prospect.html?id='+encodeURIComponent(shop.id);
+      }
+    }catch(e){
+      console.error(e);
+      showToast('خطا در ذخیره');
+      btn.disabled=false;
+    }
+  };
+  updateLive();
+}
+
+bootProspectPage('prospects', drawEvaluation);
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

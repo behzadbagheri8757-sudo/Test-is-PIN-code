@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>پرونده مغازه — ارزیابی</title>
+<link rel="stylesheet" href="./css/app.css">
+<style>
+.rank-pill{display:inline-block;padding:4px 12px;border-radius:20px;color:#fff;font-weight:800;font-size:.85rem;}
+.converted-banner{background:#0F7A4A;color:#fff;border-radius:12px;padding:12px;margin-bottom:12px;font-weight:700;}
+.answer-row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dotted var(--line);font-size:.85rem;}
+.answer-row .q{color:var(--ink-soft);flex:1;}
+.answer-row .a{font-weight:700;}
+</style>
+</head>
+<body data-page="prospects">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>پرونده مغازه بالقوه</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script src="./js/prospect-scoring.js"></script>
+<script src="./js/prospect-db.js"></script>
+<script src="./js/prospect-core.js"></script>
+<script>
+function rankPill(rank){
+  const info=PROSPECT_RANK_INFO[rank]||PROSPECT_RANK_INFO['D'];
+  return `<span class="rank-pill" style="background:${info.color}">${esc(rank)}</span>`;
+}
+
+function drawProspectDetail(){
+  const main=document.getElementById('main');
+  const id=getQueryParam('id');
+  if(!id){
+    main.innerHTML=`<div class="empty">شناسه مشخص نیست</div><a class="btn secondary" href="./prospects.html">بازگشت</a>`;
+    return;
+  }
+  const shop=prospectState.shops.find(s=>s.id===id);
+  if(!shop){
+    main.innerHTML=`<div class="empty">مغازه پیدا نشد</div><a class="btn secondary" href="./prospects.html">بازگشت</a>`;
+    return;
+  }
+  const last=shop.visits.length?shop.visits[shop.visits.length-1]:null;
+  const info=PROSPECT_RANK_INFO[shop.latestRank]||PROSPECT_RANK_INFO['D'];
+
+  let answersHtml='';
+  if(last){
+    answersHtml=PROSPECT_QUESTIONS.map(q=>{
+      const opt=q.options.find(o=>o.key===last.answers[q.id]);
+      return `<div class="answer-row"><span class="q">${esc(q.label)}</span><span class="a">${opt?esc(opt.label):'—'}</span></div>`;
+    }).join('');
+  }
+
+  const visitRows=shop.visits.slice().reverse().map(v=>{
+    const tags=(v.tags||[]).map(tk=>{
+      const t=PROSPECT_VISIT_TAGS.find(x=>x.key===tk);
+      return t?t.label:tk;
+    }).join('، ');
+    return `<div class="ledger-row" style="cursor:default;">
+      <span class="name">${prospectFaDateTime(v.date)}
+        <span class="sub">${tags?esc(tags):'بدون برچسب'}</span>
+      </span>
+      <span class="filler"></span>
+      <span class="amount">${v.score} ${rankPill(v.rank)}</span>
+    </div>`;
+  }).join('')||'<div class="empty">ویزیتی ثبت نشده</div>';
+
+  main.innerHTML=`
+    <div class="btn-row" style="margin-bottom:10px;">
+      <a class="btn secondary small" href="./prospects.html">← لیست مغازه‌ها</a>
+    </div>
+    ${shop.status==='converted'?`<div class="converted-banner">✅ این مغازه به مشتری تبدیل شده است.</div>`:''}
+    <div class="card" style="margin-bottom:12px;">
+      <div style="font-size:1.2rem;font-weight:800;">${esc(shop.name)}</div>
+      <div style="font-size:.88rem;margin-top:6px;line-height:1.7;">
+        <div>مسیر: ${esc(prospectRouteName(shop.routeId))}</div>
+        <div>محله: ${esc(prospectNeighborhoodName(shop.routeId,shop.neighborhoodId))}</div>
+        <div style="margin-top:8px;">امتیاز: <b>${shop.latestScore}</b> ${rankPill(shop.latestRank)}</div>
+        <div class="sub" style="margin-top:4px;">${esc(info.desc)}</div>
+      </div>
+    </div>
+    <div class="btn-row" style="margin-bottom:14px;">
+      <a class="btn small" href="./evaluation.html?shopId=${encodeURIComponent(shop.id)}">ثبت ویزیت / ارزیابی جدید</a>
+      ${shop.status!=='converted'
+        ? `<button type="button" class="btn small secondary" id="btn-convert">تبدیل به مشتری</button>`
+        : (shop.linkedCustomerId
+            ? `<a class="btn small secondary" href="./customer.html?id=${encodeURIComponent(shop.linkedCustomerId)}">پرونده مشتری</a>`
+            : '')}
+    </div>
+    ${last?`<h3 class="sub-title">پاسخ‌های آخرین ارزیابی</h3><div class="card">${answersHtml}</div>`:''}
+    <h3 class="sub-title">سوابق ویزیت / ارزیابی (${shop.visits.length})</h3>
+    ${visitRows}
+  `;
+
+  const btn=document.getElementById('btn-convert');
+  if(btn){
+    btn.onclick=async ()=>{
+      if(!confirm('مغازه «'+shop.name+'» به مشتری CRM تبدیل شود؟\nسوابق ارزیابی در همین بخش باقی می‌ماند و به ویزیت مشتری کپی نمی‌شود.')) return;
+      try{
+        const res=await convertProspectToCustomer(shop.id);
+        showToast(res.created?'مشتری جدید ساخته شد':'قبلاً تبدیل شده بود');
+        drawProspectDetail();
+      }catch(e){
+        console.error(e);
+        showToast(e.message||'خطا در تبدیل');
+      }
+    };
+  }
+}
+
+bootProspectPage('prospects', drawProspectDetail);
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

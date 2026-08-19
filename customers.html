@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>مشتریان — حبوبات و خشکبار باقری</title>
+<script src="./vendor/xlsx.full.min.js"></script>
+<script src="./vendor/html2canvas.min.js"></script>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-page="customers">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>دفتر حساب — فروش، مشتریان، انبار، تامین‌کننده‌ها</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script>
+/* Phase 3 — customers list. Financial math only via customerTotals(). */
+
+let custPageFilter = 'all'; // all | debt | settled | credit
+let custPageQuery = '';
+let custSortDebt = false;
+
+// Multi-page safety: forms in app.js call render() / openCustomerDetail()
+function render(){ drawCustomersPage(); }
+function openCustomerDetail(cid){
+  location.href = './customer.html?id=' + encodeURIComponent(cid);
+}
+
+function drawCustomersPage(){
+  const main = document.getElementById('main');
+  if(!main) return;
+
+  // فقط یک‌بار اسکلت (جستجو/فیلتر) ساخته می‌شود تا focus input حفظ شود
+  if(!document.getElementById('customer-list')){
+    const chip = (id, label) =>
+      `<button type="button" class="chip ${custPageFilter===id?'active':''}" data-filter="${id}">${label}</button>`;
+    main.innerHTML = `
+      <h2 class="section-title">مشتریان</h2>
+      <div class="field"><input id="customer-search" placeholder="جستجوی نام، تلفن، منطقه، آدرس..." value="${esc(custPageQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="customer-chips">
+        ${chip('all', 'همه')}
+        ${chip('debt', 'بدهکار')}
+        ${chip('settled', 'تسویه')}
+        ${chip('credit', 'بستانکار')}
+      </div>
+      <div class="btn-row" style="margin-bottom:8px;">
+        <button type="button" class="btn small secondary" id="sort-debt">${custSortDebt?'✓ ':''}مرتب‌سازی بر اساس بدهی</button>
+      </div>
+      <div id="customer-list"></div>
+    `;
+    const search = document.getElementById('customer-search');
+    search.addEventListener('input', e => {
+      custPageQuery = e.target.value;
+      renderCustomerListOnly();
+    });
+    document.querySelectorAll('#customer-chips [data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        custPageFilter = btn.getAttribute('data-filter');
+        document.querySelectorAll('#customer-chips [data-filter]').forEach(b=>{
+          b.classList.toggle('active', b.getAttribute('data-filter')===custPageFilter);
+        });
+        renderCustomerListOnly();
+      });
+    });
+    document.getElementById('sort-debt').addEventListener('click', () => {
+      custSortDebt = !custSortDebt;
+      document.getElementById('sort-debt').textContent = (custSortDebt?'✓ ':'') + 'مرتب‌سازی بر اساس بدهی';
+      renderCustomerListOnly();
+    });
+  } else {
+    // sync chip active states if redrawn from outside
+    document.querySelectorAll('#customer-chips [data-filter]').forEach(b=>{
+      b.classList.toggle('active', b.getAttribute('data-filter')===custPageFilter);
+    });
+    const sortBtn = document.getElementById('sort-debt');
+    if(sortBtn) sortBtn.textContent = (custSortDebt?'✓ ':'') + 'مرتب‌سازی بر اساس بدهی';
+  }
+  renderCustomerListOnly();
+}
+
+function renderCustomerListOnly(){
+  const listEl = document.getElementById('customer-list');
+  if(!listEl) return;
+
+  let rows = (data.customers || []).slice();
+  const q = (custPageQuery || '').trim().toLowerCase();
+  if(q){
+    rows = rows.filter(c =>
+      (c.name||'').toLowerCase().includes(q) ||
+      (c.phone||'').includes(q) ||
+      (c.region||'').toLowerCase().includes(q) ||
+      (c.ownerName||'').toLowerCase().includes(q) ||
+      (c.address||'').toLowerCase().includes(q)
+    );
+  }
+
+  rows = rows.map(c => {
+    const t = customerTotals(c.id);
+    return { c, t };
+  });
+
+  if(custPageFilter === 'debt') rows = rows.filter(x => x.t.balance > 0);
+  else if(custPageFilter === 'settled') rows = rows.filter(x => x.t.balance === 0);
+  else if(custPageFilter === 'credit') rows = rows.filter(x => x.t.balance < 0);
+
+  if(custSortDebt){
+    rows.sort((a,b) => b.t.balance - a.t.balance);
+  } else {
+    rows.sort((a,b) => (a.c.name||'').localeCompare(b.c.name||'', 'fa'));
+  }
+
+  if(!rows.length){
+    listEl.innerHTML = `<div class="empty">${(data.customers||[]).length ? 'موردی با این فیلتر پیدا نشد' : 'هنوز مشتری ثبت نشده است. با دکمه + مشتری جدید اضافه کنید.'}</div>`;
+  } else {
+    listEl.innerHTML = rows.map(({c, t}) => {
+      const word = balanceStatusWord(t.balance);
+      const color = t.balance > 0 ? 'accent-rust' : (t.balance < 0 ? 'accent-olive' : '');
+      const amt = t.balance === 0 ? word : (word + ': ' + toman(Math.abs(t.balance)) + ' ت');
+      const subParts = [];
+      if(c.phone) subParts.push(c.phone);
+      if(c.region) subParts.push(c.region);
+      if(c.address) subParts.push(c.address);
+      const sub = subParts.join(' — ');
+      return `<a class="ledger-row" href="./customer.html?id=${encodeURIComponent(c.id)}" style="text-decoration:none;color:inherit;">
+        <span class="name">${esc(c.name)}${sub?`<span class="sub">${esc(sub)}</span>`:''}</span>
+        <span class="filler"></span>
+        <span class="amount ${color}">${amt}</span>
+      </a>`;
+    }).join('');
+  }
+}
+
+bootPage('customers', function(){
+  const fab = document.getElementById('fab');
+  if(fab){
+    fab.style.display = 'block';
+    fab.onclick = () => openAddCustomer();
+  }
+  drawCustomersPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

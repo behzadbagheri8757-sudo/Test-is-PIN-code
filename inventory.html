@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>انبار — حبوبات و خشکبار باقری</title>
+<script src="./vendor/xlsx.full.min.js"></script>
+<script src="./vendor/html2canvas.min.js"></script>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-page="inventory">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>دفتر حساب — فروش، مشتریان، انبار، تامین‌کننده‌ها</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script>
+/* Phase 4 — inventory focus. Uses inventoryValue(), lowStockProducts(), existing stockLog. */
+
+function render(){ drawInventoryPage(); }
+
+function invStatus(p){
+  const q = Number(p.stockQty)||0;
+  const min = Number(p.minStock)||0;
+  if(q < 0) return { label:'منفی', cls:'accent-red' };
+  if(q === 0) return { label:'ناموجود', cls:'accent-rust' };
+  if(min > 0 && q <= min) return { label:'کم', cls:'accent-amber' };
+  return { label:'کافی', cls:'accent-olive' };
+}
+
+function stockTypeLabel(type){
+  const map = {
+    in: 'ورود',
+    out: 'خروج',
+    sale: 'فروش (فاکتور)',
+    return: 'برگشت فروش',
+    adjust: 'اصلاح دستی',
+  };
+  return map[type] || (type || 'حرکت');
+}
+
+function collectStockLog(limit){
+  const items = [];
+  (data.products||[]).forEach(p => {
+    (p.stockLog||[]).forEach(l => {
+      items.push({
+        productId: p.id,
+        name: p.name,
+        date: l.date,
+        type: l.type,
+        qty: l.qty,
+        note: l.note || '',
+      });
+    });
+  });
+  items.sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  return items.slice(0, limit || 40);
+}
+
+function drawInventoryPage(){
+  const main = document.getElementById('main');
+  if(!main) return;
+
+  const products = (data.products||[]).slice().sort((a,b)=> (a.name||'').localeCompare(b.name||'', 'fa'));
+  const totalVal = inventoryValue();
+  const zeroN = products.filter(p => (Number(p.stockQty)||0) === 0).length;
+  const negN = products.filter(p => (Number(p.stockQty)||0) < 0).length;
+  const lowList = lowStockProducts();
+  const lowN = lowList.length;
+  const logRows = collectStockLog(40);
+
+  const stockList = products.map(p => {
+    const st = invStatus(p);
+    const val = (Number(p.stockQty)||0) * (Number(p.buy)||0);
+    const unit = p.packageWeight ? ('بسته ' + p.packageWeight) : 'عدد';
+    const qtyCls = (Number(p.stockQty)||0) < 0 ? 'accent-red' : '';
+    return `<div class="ledger-row" data-edit-product="${esc(p.id)}" style="cursor:pointer;">
+      <span class="name">${esc(p.name)}
+        <span class="sub">واحد: ${esc(String(unit))} — <span class="${st.cls}">${st.label}</span>${p.minStock? ' — حداقل '+p.minStock : ''}</span>
+      </span>
+      <span class="filler"></span>
+      <span class="amount ${qtyCls}">
+        ${p.stockQty||0}
+        <span class="sub" style="display:block;">${toman(val)} ت</span>
+      </span>
+    </div>`;
+  }).join('') || '<div class="empty">کالایی ثبت نشده</div>';
+
+  const logHtml = logRows.length ? logRows.map(l => {
+    const qty = Number(l.qty)||0;
+    const signCls = qty < 0 ? 'accent-red' : 'accent-olive';
+    return `<div class="ledger-row">
+      <span class="name">${esc(l.name)}
+        <span class="sub">${faDate(l.date)} — ${esc(stockTypeLabel(l.type))}${l.note? ' — '+esc(l.note):''}</span>
+      </span>
+      <span class="filler"></span>
+      <span class="amount ${signCls}">${qty > 0 ? '+'+qty : qty}</span>
+    </div>`;
+  }).join('') : '<div class="empty">هنوز گردش موجودی ثبت نشده</div>';
+
+  main.innerHTML = `
+    <h2 class="section-title">موجودی انبار</h2>
+    <div class="btn-row" style="margin-bottom:10px;">
+      <a class="btn secondary small" href="./products.html">مدیریت کالاها</a>
+    </div>
+
+    <div class="cards" style="margin-bottom:14px;">
+      <div class="card"><div class="label">تعداد کالا</div><div class="value">${products.length}</div></div>
+      <div class="card"><div class="label">ارزش کل موجودی</div><div class="value">${toman(totalVal)} ت</div></div>
+      <div class="card"><div class="label">ناموجود</div><div class="value accent-rust">${zeroN}</div></div>
+      <div class="card"><div class="label">کم‌موجود</div><div class="value accent-amber">${lowN}</div></div>
+      ${negN ? `<div class="card wide"><div class="label">هشدار موجودی منفی</div><div class="value accent-red">${negN} کالا</div></div>` : ''}
+    </div>
+
+    <h3 class="sub-title">موجودی کالاها</h3>
+    <div class="empty" style="padding:0 0 8px;text-align:right;font-size:.78rem;">برای اصلاح موجودی روی هر کالا بزنید (همان فرم فعلی ورود/خروج/ویرایش).</div>
+    ${stockList}
+
+    <h3 class="sub-title">گردش اخیر انبار</h3>
+    ${logHtml}
+  `;
+
+  main.querySelectorAll('[data-edit-product]').forEach(row => {
+    row.addEventListener('click', () => openAddProduct(row.getAttribute('data-edit-product')));
+  });
+}
+
+bootPage('inventory', function(){
+  const fab = document.getElementById('fab');
+  if(fab){
+    fab.style.display = 'block';
+    fab.onclick = () => openAddProduct();
+  }
+  drawInventoryPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

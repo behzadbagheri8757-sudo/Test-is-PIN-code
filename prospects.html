@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>ارزیابی مغازه‌ها — حبوبات و خشکبار باقری</title>
+<link rel="stylesheet" href="./css/app.css">
+<style>
+.rank-pill{display:inline-block;padding:3px 10px;border-radius:20px;color:#fff;font-weight:800;font-size:.75rem;}
+.prospect-subnav{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+</style>
+</head>
+<body data-page="prospects">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>ارزیابی و ویزیت مغازه‌های بالقوه (جدا از مشتریان)</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script src="./js/prospect-scoring.js"></script>
+<script src="./js/prospect-db.js"></script>
+<script src="./js/prospect-core.js"></script>
+<script>
+let pQuery='', pFilter='all', pSort='score_desc';
+
+function rankPill(rank){
+  const info = PROSPECT_RANK_INFO[rank]||PROSPECT_RANK_INFO['D'];
+  return `<span class="rank-pill" style="background:${info.color}">${esc(rank)}</span>`;
+}
+
+function drawProspectsPage(){
+  const main=document.getElementById('main');
+  if(!main) return;
+  if(!document.getElementById('prospect-list')){
+    const chip=(id,label)=>`<button type="button" class="chip ${pFilter===id?'active':''}" data-pf="${id}">${label}</button>`;
+    main.innerHTML=`
+      <h2 class="section-title">مغازه‌های بالقوه</h2>
+      <div class="prospect-subnav">
+        <a class="btn small secondary" href="./evaluation.html">ثبت مغازه + ارزیابی</a>
+        <a class="btn small secondary" href="./prospect-routes.html">مسیرها</a>
+      </div>
+      <div id="prospect-target" class="cards" style="margin-bottom:12px;"></div>
+      <div class="field"><input id="prospect-search" placeholder="جستجوی نام مغازه..." value="${esc(pQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="prospect-chips">
+        ${chip('all','همه')}
+        ${chip('active','فعال')}
+        ${chip('converted','تبدیل‌شده')}
+        ${chip('A+','رتبه A+')}
+        ${chip('A','رتبه A')}
+        ${chip('B','رتبه B')}
+      </div>
+      <div class="field"><label>مرتب‌سازی</label>
+        <select id="prospect-sort">
+          <option value="score_desc" ${pSort==='score_desc'?'selected':''}>بیشترین امتیاز</option>
+          <option value="score_asc" ${pSort==='score_asc'?'selected':''}>کمترین امتیاز</option>
+          <option value="name" ${pSort==='name'?'selected':''}>نام</option>
+          <option value="newest" ${pSort==='newest'?'selected':''}>جدیدترین</option>
+        </select>
+      </div>
+      <div id="prospect-summary" class="cards" style="margin-bottom:10px;"></div>
+      <div id="prospect-list"></div>
+    `;
+    document.getElementById('prospect-search').addEventListener('input',e=>{pQuery=e.target.value;renderProspectListOnly();});
+    document.querySelectorAll('#prospect-chips [data-pf]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        pFilter=btn.getAttribute('data-pf');
+        document.querySelectorAll('#prospect-chips [data-pf]').forEach(b=>b.classList.toggle('active',b.getAttribute('data-pf')===pFilter));
+        renderProspectListOnly();
+      });
+    });
+    document.getElementById('prospect-sort').addEventListener('change',e=>{pSort=e.target.value;renderProspectListOnly();});
+  }
+  renderTargetCard();
+  renderProspectListOnly();
+}
+
+function renderTargetCard(){
+  const el=document.getElementById('prospect-target');
+  if(!el) return;
+  const dt=prospectState.dailyTarget||{target:0,count:0};
+  if(!dt.target){
+    el.innerHTML=`<div class="card wide"><div class="label">تارگت ویزیت امروز</div>
+      <div class="value" style="font-size:.95rem;">تنظیم نشده</div>
+      <div class="btn-row" style="margin-top:8px;"><button type="button" class="btn small" id="set-target-btn">تنظیم تارگت</button></div></div>`;
+  } else {
+    const pct=Math.min(100,Math.round((dt.count/dt.target)*100));
+    el.innerHTML=`<div class="card wide"><div class="label">تارگت ویزیت امروز</div>
+      <div class="value">${dt.count} / ${dt.target} <span class="sub">(${pct}٪)</span></div>
+      <div class="btn-row" style="margin-top:8px;"><button type="button" class="btn small secondary" id="set-target-btn">ویرایش تارگت</button></div></div>`;
+  }
+  const b=document.getElementById('set-target-btn');
+  if(b) b.onclick=()=>{
+    const v=prompt('تارگت ویزیت امروز (عدد):', String(dt.target||20));
+    if(v==null) return;
+    const n=parseInt(v,10);
+    if(!n||n<=0){showToast('عدد معتبر وارد کن');return;}
+    setProspectDailyTargetValue(n).then(()=>{renderTargetCard();showToast('تارگت ذخیره شد');});
+  };
+}
+
+function renderProspectListOnly(){
+  const list=document.getElementById('prospect-list');
+  const sum=document.getElementById('prospect-summary');
+  if(!list||!sum) return;
+  let rows=prospectState.shops.slice();
+  const q=(pQuery||'').trim().toLowerCase();
+  if(q) rows=rows.filter(s=>(s.name||'').toLowerCase().includes(q));
+  if(pFilter==='active') rows=rows.filter(s=>s.status!=='converted');
+  else if(pFilter==='converted') rows=rows.filter(s=>s.status==='converted');
+  else if(['A+','A','B','C','D'].includes(pFilter)) rows=rows.filter(s=>s.latestRank===pFilter);
+
+  if(pSort==='score_asc') rows.sort((a,b)=>a.latestScore-b.latestScore);
+  else if(pSort==='name') rows.sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'));
+  else if(pSort==='newest') rows.sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  else rows.sort((a,b)=>b.latestScore-a.latestScore);
+
+  sum.innerHTML=`<div class="card"><div class="label">تعداد</div><div class="value">${rows.length}</div></div>
+    <div class="card"><div class="label">کل مغازه‌ها</div><div class="value">${prospectState.shops.length}</div></div>`;
+
+  if(!rows.length){
+    list.innerHTML=`<div class="empty">${prospectState.shops.length?'موردی پیدا نشد':'هنوز مغازه‌ای ثبت نشده. با + یا «ثبت مغازه» شروع کنید.'}</div>`;
+    return;
+  }
+  list.innerHTML=rows.map(s=>`
+    <a class="ledger-row" href="./prospect.html?id=${encodeURIComponent(s.id)}" style="text-decoration:none;color:inherit;">
+      <span class="name">${esc(s.name)}${s.status==='converted'?' ✅':''}
+        <span class="sub">${esc(prospectRouteName(s.routeId))} — ${prospectFaDate(s.updatedAt)}</span>
+      </span>
+      <span class="filler"></span>
+      <span class="amount">${s.latestScore} ${rankPill(s.latestRank)}</span>
+    </a>`).join('');
+}
+
+bootProspectPage('prospects', function(){
+  const fab=document.getElementById('fab');
+  if(fab){ fab.style.display='block'; fab.onclick=()=>{ location.href='./evaluation.html'; }; }
+  drawProspectsPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

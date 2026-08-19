@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>پرداخت‌ها — حبوبات و خشکبار باقری</title>
+<script src="./vendor/xlsx.full.min.js"></script>
+<script src="./vendor/html2canvas.min.js"></script>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-page="payments">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>دفتر حساب — فروش، مشتریان، انبار، تامین‌کننده‌ها</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script>
+/* Phase 7 — payments list. Uses data.payments + supplier.payments as display only; register via openAddTransaction. */
+
+let payQuery = '';
+let payFilter = 'all'; // all | cash | card | transfer | return | discount | supplier
+let paySort = 'newest'; // newest | oldest | amountDesc | amountAsc
+
+function openCustomerDetail(cid){
+  location.href = './customer.html?id=' + encodeURIComponent(cid);
+}
+function openSupplierDetail(sid){
+  location.href = './supplier.html?id=' + encodeURIComponent(sid);
+}
+function render(){ drawPaymentsPage(); }
+
+function collectPaymentRows(){
+  const rows = [];
+  (data.payments || []).forEach(p => {
+    const cust = data.customers.find(c => c.id === p.customerId);
+    const inv = p.invoiceId ? data.invoices.find(i => i.id === p.invoiceId) : null;
+    rows.push({
+      kind: 'customer',
+      id: p.id,
+      date: p.date || '',
+      amount: p.amount || 0,
+      method: p.method || '',
+      methodLabel: paymentMethodLabel(p.method),
+      partyName: cust ? cust.name : '—',
+      partyId: p.customerId,
+      invoiceId: p.invoiceId || null,
+      invoiceNumber: inv ? inv.number : null,
+      note: p.note || '',
+      raw: p,
+    });
+  });
+  (data.suppliers || []).forEach(s => {
+    (s.payments || []).forEach((p, idx) => {
+      rows.push({
+        kind: 'supplier',
+        id: 'suppay-' + s.id + '-' + idx,
+        date: p.date || '',
+        amount: p.amount || 0,
+        method: 'supplier',
+        methodLabel: 'پرداخت به تامین‌کننده',
+        partyName: s.name || '—',
+        partyId: s.id,
+        invoiceId: null,
+        invoiceNumber: null,
+        note: p.note || p.desc || '',
+        raw: p,
+      });
+    });
+  });
+  return rows;
+}
+
+function openNewPaymentPicker(){
+  if(!data.customers.length){
+    openSheet(`<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>
+      <div class="btn-row"><a class="btn secondary" href="./customers.html">رفتن به مشتریان</a></div>`);
+    return;
+  }
+  const opts = data.customers.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'))
+    .map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  openSheet(`
+    <h3>ثبت پرداخت / دریافت</h3>
+    <div class="field"><label>مشتری</label><select id="pay-pick-customer">${opts}</select></div>
+    <div class="empty" style="padding:0 0 8px;text-align:right;font-size:.78rem;">پرداخت به تامین‌کننده از صفحه همان تامین‌کننده ثبت می‌شود.</div>
+    <div class="btn-row"><button class="btn" id="pay-pick-go">ادامه</button></div>
+  `);
+  document.getElementById('pay-pick-go').onclick = ()=>{
+    const cid = document.getElementById('pay-pick-customer').value;
+    closeModal();
+    openAddTransaction(cid);
+  };
+}
+
+function drawPaymentsPage(){
+  const main = document.getElementById('main');
+  if(!main) return;
+
+  if(!document.getElementById('payment-list')){
+    const chip = (id, label) =>
+      `<button type="button" class="chip ${payFilter===id?'active':''}" data-pf="${id}">${label}</button>`;
+    main.innerHTML = `
+      <h2 class="section-title">پرداخت‌ها / دریافت‌ها</h2>
+      <div class="field"><input id="payment-search" placeholder="جستجوی مشتری، تامین‌کننده، مبلغ، توضیح..." value="${esc(payQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="payment-chips">
+        ${chip('all','همه')}
+        ${chip('cash','نقد')}
+        ${chip('card','کارت')}
+        ${chip('transfer','انتقال')}
+        ${chip('return','برگشت')}
+        ${chip('supplier','تامین‌کننده')}
+      </div>
+      <div class="field">
+        <label>مرتب‌سازی</label>
+        <select id="payment-sort">
+          <option value="newest" ${paySort==='newest'?'selected':''}>جدیدترین</option>
+          <option value="oldest" ${paySort==='oldest'?'selected':''}>قدیمی‌ترین</option>
+          <option value="amountDesc" ${paySort==='amountDesc'?'selected':''}>بیشترین مبلغ</option>
+          <option value="amountAsc" ${paySort==='amountAsc'?'selected':''}>کمترین مبلغ</option>
+        </select>
+      </div>
+      <div id="payment-summary" class="cards" style="margin-bottom:12px;"></div>
+      <div id="payment-list"></div>
+    `;
+    document.getElementById('payment-search').addEventListener('input', e => {
+      payQuery = e.target.value;
+      renderPaymentListOnly();
+    });
+    document.querySelectorAll('#payment-chips [data-pf]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        payFilter = btn.getAttribute('data-pf');
+        document.querySelectorAll('#payment-chips [data-pf]').forEach(b=>{
+          b.classList.toggle('active', b.getAttribute('data-pf')===payFilter);
+        });
+        renderPaymentListOnly();
+      });
+    });
+    document.getElementById('payment-sort').addEventListener('change', e => {
+      paySort = e.target.value;
+      renderPaymentListOnly();
+    });
+  }
+  renderPaymentListOnly();
+}
+
+function renderPaymentListOnly(){
+  const listEl = document.getElementById('payment-list');
+  const sumEl = document.getElementById('payment-summary');
+  if(!listEl || !sumEl) return;
+
+  let rows = collectPaymentRows();
+  const q = (payQuery||'').trim().toLowerCase();
+  if(q){
+    rows = rows.filter(r =>
+      (r.partyName||'').toLowerCase().includes(q) ||
+      (r.methodLabel||'').toLowerCase().includes(q) ||
+      (r.note||'').toLowerCase().includes(q) ||
+      String(r.amount).includes(q) ||
+      String(r.invoiceNumber||'').includes(q)
+    );
+  }
+
+  if(payFilter === 'supplier') rows = rows.filter(r => r.kind === 'supplier');
+  else if(payFilter !== 'all') rows = rows.filter(r => r.method === payFilter);
+
+  if(paySort === 'oldest') rows.sort((a,b)=> (a.date||'').localeCompare(b.date||'') || a.amount-b.amount);
+  else if(paySort === 'amountDesc') rows.sort((a,b)=> b.amount - a.amount);
+  else if(paySort === 'amountAsc') rows.sort((a,b)=> a.amount - b.amount);
+  else rows.sort((a,b)=> (b.date||'').localeCompare(a.date||'') || b.amount-a.amount);
+
+  const totalAmount = rows.reduce((s,r)=>s+(r.amount||0),0);
+  sumEl.innerHTML = `
+    <div class="card"><div class="label">تعداد (فیلتر فعلی)</div><div class="value">${rows.length}</div></div>
+    <div class="card"><div class="label">جمع مبالغ</div><div class="value">${toman(totalAmount)} ت</div></div>
+  `;
+
+  if(!rows.length){
+    listEl.innerHTML = `<div class="empty">${collectPaymentRows().length?'موردی پیدا نشد':'هنوز پرداختی ثبت نشده. با + ثبت کنید.'}</div>`;
+    return;
+  }
+
+  listEl.innerHTML = rows.map(r => {
+    const href = r.kind === 'supplier'
+      ? `./supplier.html?id=${encodeURIComponent(r.partyId)}`
+      : (r.invoiceId
+          ? `./invoice.html?id=${encodeURIComponent(r.invoiceId)}`
+          : `./customer.html?id=${encodeURIComponent(r.partyId)}`);
+    const subParts = [r.methodLabel, faDate(r.date)];
+    if(r.invoiceNumber != null) subParts.push('فاکتور #' + r.invoiceNumber);
+    if(r.note) subParts.push(r.note);
+    return `<a class="ledger-row" href="${href}" style="text-decoration:none;color:inherit;">
+      <span class="name">${esc(r.partyName)}
+        <span class="sub">${esc(subParts.join(' — '))}</span>
+      </span>
+      <span class="filler"></span>
+      <span class="amount">${toman(r.amount)} ت</span>
+    </a>`;
+  }).join('');
+}
+
+bootPage('payments', function(){
+  const fab = document.getElementById('fab');
+  if(fab){
+    fab.style.display = 'block';
+    fab.onclick = () => openNewPaymentPicker();
+  }
+  drawPaymentsPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

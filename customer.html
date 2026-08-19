@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>مشتری — حبوبات و خشکبار باقری</title>
+<script src="./vendor/xlsx.full.min.js"></script>
+<script src="./vendor/html2canvas.min.js"></script>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-page="customer">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>دفتر حساب — فروش، مشتریان، انبار، تامین‌کننده‌ها</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script>
+/* Phase 3 — customer dossier page. Uses customerTotals / customerProfit only. */
+
+let currentCustomerId = null;
+
+function render(){ drawCustomerPage(); }
+function openCustomerDetail(cid){
+  if(cid && cid === currentCustomerId){ drawCustomerPage(); return; }
+  location.href = './customer.html?id=' + encodeURIComponent(cid);
+}
+
+function invoicePayStatus(inv){
+  const paid = typeof invoiceEffectivePaid === 'function' ? invoiceEffectivePaid(inv) : ((inv.cashPaid||0)+(inv.cardPaid||0)+(inv.transferPaid||0)+(inv.checkPaid||0));
+  const total = inv.total||0;
+  if(total <= 0) return { label: '—', cls: '' };
+  if(paid <= 0) return { label: 'پرداخت‌نشده', cls: 'accent-rust' };
+  if(paid + 0.5 >= total) return { label: 'تسویه روی فاکتور', cls: 'accent-olive' };
+  return { label: 'پرداخت جزئی', cls: 'accent-amber' };
+}
+
+function drawCustomerPage(){
+  const main = document.getElementById('main');
+  if(!main) return;
+  const id = currentCustomerId || getQueryParam('id');
+  currentCustomerId = id;
+
+  if(!id){
+    main.innerHTML = `<div class="empty">شناسه مشتری مشخص نشده است.</div>
+      <div class="btn-row"><a class="btn secondary" href="./customers.html">بازگشت به لیست مشتریان</a></div>`;
+    return;
+  }
+  const c = data.customers.find(x => x.id === id);
+  if(!c){
+    main.innerHTML = `<div class="empty">مشتری با این شناسه پیدا نشد.</div>
+      <div class="btn-row"><a class="btn secondary" href="./customers.html">بازگشت به لیست مشتریان</a></div>`;
+    return;
+  }
+
+  const t = customerTotals(c.id);
+  const profit = customerProfit(c.id);
+  const word = balanceStatusWord(t.balance);
+  const color = t.balance > 0 ? 'accent-rust' : (t.balance < 0 ? 'accent-olive' : 'accent-olive');
+  const balanceLine = t.balance === 0 ? word : (word + ': ' + toman(Math.abs(t.balance)) + ' ت');
+
+  const invs = customerInvoices(c.id).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||'') || String(b.number).localeCompare(String(a.number)));
+  const pays = customerPayments(c.id).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const chks = customerChecks(c.id).slice().sort((a,b)=> (b.dueDate||'').localeCompare(a.dueDate||''));
+  const visits = (c.visits||[]).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||'') || (b.time||'').localeCompare(a.time||''));
+
+  const invRows = invs.length ? invs.map(inv => {
+    const st = invoicePayStatus(inv);
+    return `<a class="ledger-row" href="./invoice.html?id=${encodeURIComponent(inv.id)}" style="text-decoration:none;color:inherit;">
+      <span class="name">#${esc(String(inv.number||''))}<span class="sub">${faDate(inv.date)} — <span class="${st.cls}">${st.label}</span></span></span>
+      <span class="filler"></span>
+      <span class="amount">${toman(inv.total)} ت</span>
+    </a>`;
+  }).join('') : '<div class="empty" style="padding:12px 0;">فاکتوری ثبت نشده</div>';
+
+  const payRows = pays.length ? pays.map(p => {
+    const method = paymentMethodLabel(p.method);
+    return `<div class="ledger-row">
+      <span class="name">${esc(method)}${p.note?`<span class="sub">${esc(p.note)}</span>`:''}<span class="sub">${faDate(p.date)}</span></span>
+      <span class="filler"></span>
+      <span class="amount">${toman(p.amount)} ت</span>
+    </div>`;
+  }).join('') : '<div class="empty" style="padding:12px 0;">پرداختی ثبت نشده</div>';
+
+  const chkRows = chks.length ? chks.map(ch => {
+    const st = ch.status === 'cleared' ? 'پاس‌شده' : 'در جریان';
+    const stCls = ch.status === 'cleared' ? 'accent-olive' : 'accent-amber';
+    return `<div class="ledger-row">
+      <span class="name">${esc(ch.checkNumber||'چک')}<span class="sub">سررسید: ${faDate(ch.dueDate)} — <span class="${stCls}">${st}</span></span></span>
+      <span class="filler"></span>
+      <span class="amount">${toman(ch.amount)} ت</span>
+    </div>`;
+  }).join('') : '<div class="empty" style="padding:12px 0;">چکی ثبت نشده</div>';
+
+  const visitRows = visits.length ? visits.slice(0, 30).map(v => {
+    const ordered = v.ordered || v.result === (typeof VISIT_RESULTS!=='undefined' && VISIT_RESULTS[0]);
+    const scoreBit = (typeof v.score === 'number') ? (' — امتیاز: ' + v.score + ' از ۱۰۰') : '';
+    const extraBits = [];
+    if(v.reason) extraBits.push('دلیل: ' + v.reason);
+    if(v.opportunity) extraBits.push('فرصت (مشاهده): ' + v.opportunity);
+    if(v.threat) extraBits.push('تهدید (مشاهده): ' + v.threat);
+    if(v.nextAction) extraBits.push('اقدام بعدی: ' + v.nextAction);
+    if(Array.isArray(v.tags) && v.tags.length) extraBits.push('برچسب: ' + v.tags.join('، '));
+    if(v.note) extraBits.push(v.note);
+    const extraHtml = extraBits.map(x => `<span class="sub">${esc(x)}</span>`).join('');
+    return `<div class="ledger-row" style="cursor:default;">
+      <span class="name">${esc(v.result||'ویزیت')}
+        <span class="sub">${faDate(v.date)}${v.time?' — '+esc(v.time):''}${scoreBit}</span>
+        ${extraHtml}
+      </span>
+      <span class="filler"></span>
+      <span class="amount ${ordered?'accent-olive':''}">${ordered?'سفارش':'ویزیت'}</span>
+    </div>`;
+  }).join('') : '<div class="empty" style="padding:12px 0;">ویزیتی ثبت نشده</div>';
+
+  let behaviorHtml = '';
+  if(typeof customerBehavior === 'function'){
+    const b = customerBehavior(c.id);
+    const trendLabel = b.amountTrend === 'up' ? 'سیگنال افزایش' : (b.amountTrend === 'down' ? 'سیگنال کاهش' : (b.amountTrend === 'flat' ? 'تقریباً ثابت' : null));
+    const trendCls = b.amountTrend === 'up' ? 'accent-olive' : (b.amountTrend === 'down' ? 'accent-rust' : '');
+    const intervalText = b.avgIntervalDays != null
+      ? (Math.round(b.avgIntervalDays * 10) / 10) + ' روز'
+      : 'اطلاعات کافی نیست';
+    const gapText = b.daysSinceLast != null ? (Math.round(b.daysSinceLast) + ' روز') : '—';
+    const behindHtml = b.behindPattern === true
+      ? `<div class="card wide"><div class="label">نشانه</div><div class="value accent-amber" style="font-size:.95rem;">از الگوی معمول خرید عقب افتاده</div></div>`
+      : (b.behindPattern === false
+        ? `<div class="card wide"><div class="label">وضعیت فاصله</div><div class="value accent-olive" style="font-size:.95rem;">در محدوده الگوی معمول</div></div>`
+        : '');
+    const topProdHtml = b.topProducts && b.topProducts.length
+      ? b.topProducts.map(p => `<div class="ledger-row" style="cursor:default;"><span class="name">${esc(p.name)}<span class="sub">تعداد: ${p.qty}</span></span><span class="filler"></span><span class="amount">${toman(p.revenue)} ت</span></div>`).join('')
+      : '<div class="empty" style="padding:8px 0;">اطلاعات کافی نیست</div>';
+    const decliningHtml = b.decliningProducts && b.decliningProducts.length
+      ? b.decliningProducts.map(p => `<div class="ledger-row" style="cursor:default;"><span class="name">${esc(p.name)}<span class="sub">قبلاً ${p.earlyQty} ← اخیراً ${p.lateQty}</span></span></div>`).join('')
+      : '';
+    const lv = b.lastVisit;
+    const lastVisitBits = [];
+    if(lv){
+      lastVisitBits.push(esc(lv.result || 'ویزیت'));
+      if(lv.reason) lastVisitBits.push('دلیل: ' + esc(lv.reason));
+      if(lv.nextAction) lastVisitBits.push('اقدام بعدی: ' + esc(lv.nextAction));
+      if(lv.opportunity) lastVisitBits.push('فرصت (مشاهده): ' + esc(lv.opportunity));
+      if(lv.threat) lastVisitBits.push('تهدید (مشاهده): ' + esc(lv.threat));
+      if(Array.isArray(lv.tags) && lv.tags.length) lastVisitBits.push('برچسب: ' + esc(lv.tags.join('، ')));
+    }
+    const convText = b.conversionRate != null
+      ? (Math.round(b.conversionRate * 100) + '٪ (' + b.orderedCount + ' از ' + b.visitCount + ')')
+      : (b.visitCount ? '—' : 'ویزیتی ثبت نشده');
+
+    behaviorHtml = `
+      <h3 class="sub-title">رفتار خرید مشتری</h3>
+      <div class="cards" style="margin-bottom:10px;">
+        <div class="card"><div class="label">اولین خرید</div><div class="value" style="font-size:.95rem;">${b.firstInvoiceDate ? faDate(b.firstInvoiceDate) : '—'}</div></div>
+        <div class="card"><div class="label">آخرین خرید</div><div class="value" style="font-size:.95rem;">${b.lastInvoiceDate ? faDate(b.lastInvoiceDate) : '—'}</div></div>
+        <div class="card"><div class="label">تعداد فاکتور</div><div class="value">${b.invoiceCount}</div></div>
+        <div class="card"><div class="label">میانگین مبلغ فاکتور</div><div class="value" style="font-size:.95rem;">${b.avgInvoice != null ? toman(b.avgInvoice) + ' ت' : '—'}</div></div>
+        <div class="card"><div class="label">الگوی معمول خرید</div><div class="value" style="font-size:.9rem;">${esc(String(intervalText))}</div></div>
+        <div class="card"><div class="label">فاصله از آخرین خرید</div><div class="value" style="font-size:.95rem;">${esc(String(gapText))}</div></div>
+        <div class="card"><div class="label">خرید خالص ۳۰ روز</div><div class="value" style="font-size:.95rem;">${toman(b.sales30 || 0)} ت</div></div>
+        <div class="card"><div class="label">خرید خالص ۹۰ روز</div><div class="value" style="font-size:.95rem;">${toman(b.sales90 || 0)} ت</div></div>
+        ${(b.returnTotal > 0) ? `<div class="card wide"><div class="label">جمع برگشت از فروش (کل سابقه)</div><div class="value" style="font-size:.95rem;">${toman(b.returnTotal)} ت</div></div>` : ''}
+        ${trendLabel ? `<div class="card wide"><div class="label">روند مبلغ (۳۰ روز اخیر نسبت به ۳۰ روز قبل)</div><div class="value ${trendCls}" style="font-size:1rem;">${trendLabel}</div></div>` : `<div class="card wide"><div class="label">روند مبلغ</div><div class="value" style="font-size:.9rem;">اطلاعات کافی نیست</div></div>`}
+        ${behindHtml}
+        <div class="card"><div class="label">تعداد ویزیت</div><div class="value">${b.visitCount}</div></div>
+        <div class="card"><div class="label">نرخ تبدیل ویزیت به سفارش</div><div class="value" style="font-size:.85rem;">${esc(String(convText))}</div></div>
+      </div>
+      <div class="sub-title" style="margin-top:4px;">کالاهای اصلی مشتری</div>
+      ${topProdHtml}
+      ${decliningHtml ? `<div class="sub-title" style="margin-top:10px;">کالاهای با کاهش خرید (نسبت به نیمه اول سابقه)</div>${decliningHtml}` : ''}
+      ${lv ? `<div class="card" style="margin-top:10px;margin-bottom:12px;">
+        <div class="label">آخرین ویزیت — ${faDate(lv.date)}${lv.time ? ' ' + esc(lv.time) : ''}</div>
+        <div style="font-size:.88rem;line-height:1.7;margin-top:6px;">${lastVisitBits.join('<br>')}</div>
+      </div>` : '<div class="empty" style="padding:8px 0 12px;">ویزیتی ثبت نشده</div>'}
+    `;
+  }
+
+  main.innerHTML = `
+    <div class="btn-row" style="margin-bottom:10px;">
+      <a class="btn secondary small" href="./customers.html">← مشتریان</a>
+    </div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <div style="font-size:1.15rem;font-weight:800;color:var(--olive-dark);margin-bottom:8px;">${esc(c.name)}</div>
+      <div style="font-size:.88rem;line-height:1.85;color:var(--ink);">
+        ${c.ownerName ? '<div>صاحب: '+esc(c.ownerName)+'</div>' : ''}
+        ${c.phone ? '<div>تلفن: '+esc(c.phone)+'</div>' : ''}
+        ${c.region ? '<div>منطقه: '+esc(c.region)+'</div>' : ''}
+        ${c.route ? '<div>مسیر: '+esc(c.route)+'</div>' : ''}
+        ${c.address ? '<div>آدرس: '+esc(c.address)+'</div>' : ''}
+        ${c.note ? '<div>یادداشت: '+esc(c.note)+'</div>' : ''}
+      </div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px dotted var(--line);">
+        <div class="label">مانده حساب</div>
+        <div class="value ${color}" style="font-size:1.25rem;">${balanceLine}</div>
+      </div>
+    </div>
+
+    <div class="cards" style="margin-bottom:14px;">
+      <div class="card"><div class="label">مجموع خرید (فاکتورها)</div><div class="value">${toman(t.invTotal)} ت</div></div>
+      <div class="card"><div class="label">مجموع پرداخت‌ها</div><div class="value">${toman(t.payTotal)} ت</div></div>
+      <div class="card"><div class="label">جمع چک‌ها</div><div class="value">${toman(t.checkTotal)} ت</div></div>
+      <div class="card"><div class="label">مانده اولیه</div><div class="value">${toman(t.openingBalance)} ت</div></div>
+      <div class="card"><div class="label">تعداد فاکتور</div><div class="value">${invs.length}</div></div>
+      <div class="card"><div class="label">سود مشتری</div><div class="value accent-amber">${toman(profit)} ت</div></div>
+    </div>
+
+    ${behaviorHtml}
+
+    <h3 class="sub-title">عملیات سریع</h3>
+    <div class="btn-row" style="margin-bottom:16px;">
+      <button type="button" class="btn small" id="act-invoice">ثبت فاکتور</button>
+      <button type="button" class="btn small secondary" id="act-pay">ثبت پرداخت</button>
+      <button type="button" class="btn small secondary" id="act-visit">ثبت ویزیت</button>
+      <button type="button" class="btn small secondary" id="act-check">ثبت چک</button>
+      <button type="button" class="btn small secondary" id="act-edit">ویرایش مشتری</button>
+    </div>
+
+    <h3 class="sub-title">فاکتورها (${invs.length})</h3>
+    ${invRows}
+
+    <h3 class="sub-title">پرداخت‌ها (${pays.length})</h3>
+    ${payRows}
+
+    <h3 class="sub-title">چک‌ها (${chks.length})</h3>
+    ${chkRows}
+
+    <h3 class="sub-title">ویزیت‌ها و ارزیابی‌ها (${visits.length})</h3>
+    <div class="btn-row" style="margin-bottom:8px;">
+      <button type="button" class="btn small" id="act-visit-section">ثبت ویزیت برای این مشتری</button>
+      <a class="btn small secondary" href="./visits.html">همه ویزیت‌ها</a>
+    </div>
+    ${visitRows}
+  `;
+
+  document.getElementById('act-invoice').onclick = () => openAddInvoice(c.id);
+  document.getElementById('act-pay').onclick = () => openAddTransaction(c.id);
+  document.getElementById('act-visit').onclick = () => openAddVisit(c.id);
+  const visitSecBtn = document.getElementById('act-visit-section');
+  if(visitSecBtn) visitSecBtn.onclick = () => openAddVisit(c.id);
+  document.getElementById('act-check').onclick = () => openAddCheck(c.id);
+  document.getElementById('act-edit').onclick = () => openAddCustomer(c.id);
+}
+
+bootPage('customers', function(){
+  currentCustomerId = getQueryParam('id');
+  drawCustomerPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

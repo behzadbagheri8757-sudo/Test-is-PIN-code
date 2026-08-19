@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>اجناس — حبوبات و خشکبار باقری</title>
+<script src="./vendor/xlsx.full.min.js"></script>
+<script src="./vendor/html2canvas.min.js"></script>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-page="products">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>دفتر حساب — فروش، مشتریان، انبار، تامین‌کننده‌ها</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script>
+/* Phase 4 — products list. Stock math only via existing fields + inventoryValue helpers. */
+
+let prodQuery = '';
+let prodFilter = 'all'; // all | in | low | zero | neg | inactive
+let prodSort = 'name'; // name | stockDesc | stockAsc | valueDesc
+
+function render(){ drawProductsPage(); }
+
+function productStatus(p){
+  const q = Number(p.stockQty)||0;
+  const min = Number(p.minStock)||0;
+  if(q < 0) return { key:'neg', label:'موجودی منفی', cls:'accent-red' };
+  if(q === 0) return { key:'zero', label:'ناموجود', cls:'accent-rust' };
+  if(min > 0 && q <= min) return { key:'low', label:'کم‌موجود', cls:'accent-amber' };
+  return { key:'ok', label:'موجود', cls:'accent-olive' };
+}
+
+function productValue(p){
+  return (Number(p.stockQty)||0) * (Number(p.buy)||0);
+}
+
+function drawProductsPage(){
+  const main = document.getElementById('main');
+  if(!main) return;
+
+  if(!document.getElementById('product-list')){
+    const chip = (id, label) =>
+      `<button type="button" class="chip ${prodFilter===id?'active':''}" data-pf="${id}">${label}</button>`;
+    main.innerHTML = `
+      <h2 class="section-title">کالا و اجناس</h2>
+      <div class="btn-row" style="margin-bottom:10px;">
+        <a class="btn secondary small" href="./inventory.html">مشاهده انبار</a>
+      </div>
+      <div class="field"><input id="product-search" placeholder="جستجوی نام یا دسته‌بندی..." value="${esc(prodQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="product-chips">
+        ${chip('all','همه')}
+        ${chip('in','موجود')}
+        ${chip('low','کم‌موجود')}
+        ${chip('zero','ناموجود')}
+        ${chip('neg','منفی')}
+      </div>
+      <div class="field">
+        <label>مرتب‌سازی</label>
+        <select id="product-sort">
+          <option value="name" ${prodSort==='name'?'selected':''}>نام</option>
+          <option value="stockDesc" ${prodSort==='stockDesc'?'selected':''}>بیشترین موجودی</option>
+          <option value="stockAsc" ${prodSort==='stockAsc'?'selected':''}>کمترین موجودی</option>
+          <option value="valueDesc" ${prodSort==='valueDesc'?'selected':''}>ارزش موجودی</option>
+        </select>
+      </div>
+      <div id="product-list"></div>
+    `;
+    document.getElementById('product-search').addEventListener('input', e => {
+      prodQuery = e.target.value;
+      renderProductListOnly();
+    });
+    document.querySelectorAll('#product-chips [data-pf]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        prodFilter = btn.getAttribute('data-pf');
+        document.querySelectorAll('#product-chips [data-pf]').forEach(b=>{
+          b.classList.toggle('active', b.getAttribute('data-pf')===prodFilter);
+        });
+        renderProductListOnly();
+      });
+    });
+    document.getElementById('product-sort').addEventListener('change', e => {
+      prodSort = e.target.value;
+      renderProductListOnly();
+    });
+  } else {
+    document.querySelectorAll('#product-chips [data-pf]').forEach(b=>{
+      b.classList.toggle('active', b.getAttribute('data-pf')===prodFilter);
+    });
+    const sel = document.getElementById('product-sort');
+    if(sel) sel.value = prodSort;
+  }
+  renderProductListOnly();
+}
+
+function renderProductListOnly(){
+  const list = document.getElementById('product-list');
+  if(!list) return;
+
+  let rows = (data.products || []).slice();
+  const q = (prodQuery||'').trim().toLowerCase();
+  if(q){
+    rows = rows.filter(p =>
+      (p.name||'').toLowerCase().includes(q) ||
+      (p.category||'').toLowerCase().includes(q)
+    );
+  }
+
+  rows = rows.map(p => ({ p, st: productStatus(p), val: productValue(p) }));
+
+  if(prodFilter === 'in') rows = rows.filter(x => (Number(x.p.stockQty)||0) > 0);
+  else if(prodFilter === 'low') rows = rows.filter(x => x.st.key === 'low');
+  else if(prodFilter === 'zero') rows = rows.filter(x => x.st.key === 'zero');
+  else if(prodFilter === 'neg') rows = rows.filter(x => x.st.key === 'neg');
+
+  if(prodSort === 'stockDesc') rows.sort((a,b)=> (b.p.stockQty||0)-(a.p.stockQty||0));
+  else if(prodSort === 'stockAsc') rows.sort((a,b)=> (a.p.stockQty||0)-(b.p.stockQty||0));
+  else if(prodSort === 'valueDesc') rows.sort((a,b)=> b.val - a.val);
+  else rows.sort((a,b)=> (a.p.name||'').localeCompare(b.p.name||'', 'fa'));
+
+  if(!rows.length){
+    list.innerHTML = `<div class="empty">${(data.products||[]).length?'موردی پیدا نشد':'هنوز کالایی ثبت نشده. با + کالا اضافه کنید.'}</div>`;
+  } else {
+    list.innerHTML = rows.map(({p, st, val}) => {
+      const unit = p.packageWeight ? ('بسته ' + p.packageWeight) : 'عدد';
+      const inactive = p.active === false ? ' <span class="badge">غیرفعال</span>' : '';
+      return `<div class="ledger-row" data-edit-product="${esc(p.id)}" style="cursor:pointer;">
+        <span class="name">${esc(p.name)}${inactive}
+          <span class="sub">${esc(p.category||'—')} — واحد: ${esc(String(unit))} — خرید: ${toman(p.buy)} / فروش: ${toman(p.retail||p.sell||0)}</span>
+          <span class="sub ${st.cls}">${st.label}${st.key==='low' && p.minStock ? ' (حداقل '+p.minStock+')' : ''}</span>
+        </span>
+        <span class="filler"></span>
+        <span class="amount">
+          ${p.stockQty||0}
+          <span class="sub" style="display:block;">ارزش: ${toman(val)} ت</span>
+        </span>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('[data-edit-product]').forEach(row => {
+      row.addEventListener('click', () => openAddProduct(row.getAttribute('data-edit-product')));
+    });
+  }
+}
+
+bootPage('products', function(){
+  const fab = document.getElementById('fab');
+  if(fab){
+    fab.style.display = 'block';
+    fab.onclick = () => openAddProduct();
+  }
+  drawProductsPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>

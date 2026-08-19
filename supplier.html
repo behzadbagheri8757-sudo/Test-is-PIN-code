@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="باقری">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<title>تامین‌کننده — حبوبات و خشکبار باقری</title>
+<script src="./vendor/xlsx.full.min.js"></script>
+<script src="./vendor/html2canvas.min.js"></script>
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body data-page="supplier">
+<header>
+  <h1>حبوبات و خشکبار باقری</h1>
+  <p>دفتر حساب — فروش، مشتریان، انبار، تامین‌کننده‌ها</p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+<button class="fab" id="fab" style="display:none;">+</button>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script src="./js/models.js"></script>
+<script src="./js/ui.js"></script>
+<script src="./js/db.js"></script>
+<script src="./js/calc.js"></script>
+<script src="./js/stock.js"></script>
+<script src="./js/payments.js"></script>
+<script src="./js/backup.js"></script>
+<script src="./js/nav.js"></script>
+<script src="./js/app.js"></script>
+<script>
+/* Capture app.js openSupplierDetail BEFORE the page override is declared.
+   Function declarations are hoisted in the same script, so a same-script
+   `const x = openSupplierDetail` would capture the override, not the sheet opener. */
+window.__appOpenSupplierDetail = openSupplierDetail;
+</script>
+<script>
+/* Phase 5 — supplier dossier. Uses supplierTotals(); purchase/pay/edit via existing app sheets. */
+
+let currentSupplierId = null;
+
+function openSupplierDetail(sid){
+  if(document.body.dataset.page === 'supplier'){
+    const qid = getQueryParam('id') || currentSupplierId;
+    if(sid === qid || sid === currentSupplierId){
+      currentSupplierId = sid;
+      drawSupplierPage();
+      return;
+    }
+  }
+  location.href = './supplier.html?id=' + encodeURIComponent(sid);
+}
+function render(){ drawSupplierPage(); }
+
+function drawSupplierPage(){
+  const main = document.getElementById('main');
+  if(!main) return;
+  const id = currentSupplierId || getQueryParam('id');
+  currentSupplierId = id;
+
+  if(!id){
+    main.innerHTML = `<div class="empty">شناسه تامین‌کننده مشخص نشده است.</div>
+      <div class="btn-row"><a class="btn secondary" href="./suppliers.html">بازگشت به لیست</a></div>`;
+    return;
+  }
+  const s = data.suppliers.find(x => x.id === id);
+  if(!s){
+    main.innerHTML = `<div class="empty">تامین‌کننده پیدا نشد.</div>
+      <div class="btn-row"><a class="btn secondary" href="./suppliers.html">بازگشت به لیست</a></div>`;
+    return;
+  }
+
+  const t = supplierTotals(s.id);
+  const word = balanceStatusWord(t.balance);
+  const color = t.balance > 0 ? 'accent-rust' : (t.balance < 0 ? 'accent-olive' : 'accent-olive');
+  const balanceLine = t.balance === 0 ? word : (word + ': ' + toman(Math.abs(t.balance)) + ' ت');
+
+  const purchases = (s.purchases||[]).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+  const payments = (s.payments||[]).slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+
+  const purchaseRows = purchases.length ? purchases.map(p => {
+    const ret = (p.returns||[]).reduce((a,r)=>a+(r.amount||0),0);
+    const net = (p.amount||0) - ret;
+    const itemsHint = (p.items&&p.items.length) ? (p.items.length + ' قلم') :
+      (p.productId ? ((data.products.find(x=>x.id===p.productId)||{}).name||'کالا') : (p.desc||'خرید'));
+    return `<div class="ledger-row">
+      <span class="name">${esc(String(itemsHint))}
+        <span class="sub">${faDate(p.date)}${ret? ' — برگشت: '+toman(ret)+' ت':''}</span>
+      </span>
+      <span class="filler"></span>
+      <span class="amount">${toman(net)} ت</span>
+    </div>`;
+  }).join('') : '<div class="empty" style="padding:12px 0;">خریدی ثبت نشده</div>';
+
+  const payRows = payments.length ? payments.map(p => `
+    <div class="ledger-row">
+      <span class="name">پرداخت<span class="sub">${faDate(p.date)}</span></span>
+      <span class="filler"></span>
+      <span class="amount">${toman(p.amount)} ت</span>
+    </div>
+  `).join('') : '<div class="empty" style="padding:12px 0;">پرداختی ثبت نشده</div>';
+
+  main.innerHTML = `
+    <div class="btn-row" style="margin-bottom:10px;">
+      <a class="btn secondary small" href="./suppliers.html">← تامین‌کنندگان</a>
+    </div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <div style="font-size:1.15rem;font-weight:800;color:var(--olive-dark);margin-bottom:8px;">${esc(s.name)}${s.active===false?' <span class="badge pending">غیرفعال</span>':''}</div>
+      <div style="font-size:.88rem;line-height:1.85;">
+        ${s.phone ? '<div>تلفن: '+esc(s.phone)+'</div>' : ''}
+      </div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px dotted var(--line);">
+        <div class="label">مانده حساب</div>
+        <div class="value ${color}" style="font-size:1.25rem;">${balanceLine}</div>
+      </div>
+    </div>
+
+    <div class="cards" style="margin-bottom:14px;">
+      <div class="card"><div class="label">جمع خرید</div><div class="value">${toman(t.purchaseTotal)} ت</div></div>
+      <div class="card"><div class="label">پرداخت‌ها</div><div class="value">${toman(t.payTotal)} ت</div></div>
+      <div class="card"><div class="label">برگشت از خرید</div><div class="value">${toman(t.returnTotal)} ت</div></div>
+      <div class="card"><div class="label">مانده اولیه</div><div class="value">${toman(t.openingBalance)} ت</div></div>
+      <div class="card"><div class="label">تعداد خرید</div><div class="value">${purchases.length}</div></div>
+      <div class="card"><div class="label">تعداد پرداخت</div><div class="value">${payments.length}</div></div>
+    </div>
+
+    <h3 class="sub-title">عملیات سریع</h3>
+    <div class="btn-row" style="margin-bottom:16px;">
+      <button type="button" class="btn small" id="act-ops">ثبت خرید / پرداخت / ویرایش</button>
+    </div>
+    <div class="empty" style="padding:0 0 12px;text-align:right;font-size:.78rem;">
+      با این دکمه همان فرم‌های فعلی برنامه (خرید، پرداخت، ویرایش، برگشت خرید) باز می‌شود.
+    </div>
+
+    <h3 class="sub-title">خریدها (${purchases.length})</h3>
+    ${purchaseRows}
+
+    <h3 class="sub-title">پرداخت‌ها (${payments.length})</h3>
+    ${payRows}
+  `;
+
+  const actOps = document.getElementById('act-ops');
+  if(actOps){
+    actOps.onclick = function(){
+      const openSheetOps = window.__appOpenSupplierDetail;
+      if(typeof openSheetOps !== 'function'){
+        if(typeof showToast === 'function') showToast('فرم عملیات در دسترس نیست');
+        return;
+      }
+      openSheetOps(s.id);
+    };
+  }
+}
+
+bootPage('suppliers', function(){
+  currentSupplierId = getQueryParam('id');
+  drawSupplierPage();
+});
+</script>
+<script src="./js/sw-register.js"></script>
+</body>
+</html>
