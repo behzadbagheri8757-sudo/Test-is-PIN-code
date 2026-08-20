@@ -242,7 +242,7 @@ h3.sub-title{
 .ledger-row:last-child{border-bottom:none;}
 .ledger-row .name{
   font-weight:700;
-  font-size:.9rem;
+  font-size:1rem;
   color:var(--color-text);
   white-space:nowrap;
   overflow:hidden;
@@ -559,6 +559,9 @@ main select,
   background:var(--color-surface);
   color:var(--color-text);
   min-height:44px;
+}
+.field select{
+  font-size:16px;
 }
 
 /* ===================== DASHBOARD ===================== */
